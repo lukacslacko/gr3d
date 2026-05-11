@@ -212,11 +212,30 @@ function randomS3() { return normalize4([randn(), randn(), randn(), randn()]); }
 function dot4(a, b) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3]; }
 
 // ====================================================================
-// Potential field on the 8 cells (per-voxel scalar; trilinear sampling)
+// Circle source on S^3 (fixed center, fixed 2-plane, UI radius)
+//   gamma(theta) = cos(r) * center + sin(r) * (cos(theta) u1 + sin(theta) u2)
+// Closed-form S^3 distance from p to gamma:
+//   d(p, gamma) = arccos( cos(r) (p . c) + sin(r) sqrt((p . u1)^2 + (p . u2)^2) )
 // ====================================================================
-let poles = [randomS3(), randomS3(), randomS3()];
+const circleSource = {
+  center: [0, 0, 0, 1],
+  u1:     [1, 0, 0, 0],
+  u2:     [0, 1, 0, 0],
+  radius: 0.25 * Math.PI,
+};
+
 let sourcePoint = randomS3();
 let potential = null;
+
+function distToCircle(p) {
+  const c = circleSource;
+  const a = p[0]*c.center[0] + p[1]*c.center[1] + p[2]*c.center[2] + p[3]*c.center[3];
+  const b = p[0]*c.u1[0]     + p[1]*c.u1[1]     + p[2]*c.u1[2]     + p[3]*c.u1[3];
+  const e = p[0]*c.u2[0]     + p[1]*c.u2[1]     + p[2]*c.u2[2]     + p[3]*c.u2[3];
+  let m = Math.cos(c.radius) * a + Math.sin(c.radius) * Math.sqrt(b*b + e*e);
+  if (m > 1) m = 1; else if (m < -1) m = -1;
+  return Math.acos(m);
+}
 
 function buildPotential() {
   const N = params.N;
@@ -236,13 +255,8 @@ function buildPotential() {
           v[axis] = sign;
           v[free[0]] = ux; v[free[1]] = uy; v[free[2]] = uz;
           const p = normalize4(v);
-          let phi = 0;
-          for (const pole of poles) {
-            const c = Math.max(-1, Math.min(1, dot4(p, pole)));
-            const d = Math.acos(c);
-            phi += 1 / (d + params.eps);
-          }
-          potential[cellBase + ix * N * N + iy * N + iz] = phi;
+          const d = distToCircle(p);
+          potential[cellBase + ix * N * N + iy * N + iz] = 1 / (d + params.eps);
         }
       }
     }
@@ -480,12 +494,31 @@ function reprojectGeodesics() {
 }
 
 // ====================================================================
-// Pole and source markers
+// Circle-source visualization, test-source marker
 // ====================================================================
 const markerGroup = new THREE.Group();
 scene.add(markerGroup);
-let poleMeshes = [];
+const CIRCLE_SAMPLES = 256;
+let circleSamples = []; // 4D unit vectors around the circle
+let circleLine = null;  // LineSegments, rebuilt when CIRCLE_SAMPLES changes
+let circleCenterMesh = null;
 let sourceMesh = null;
+
+function rebuildCircleSamples() {
+  const c = circleSource;
+  const cosR = Math.cos(c.radius), sinR = Math.sin(c.radius);
+  circleSamples = new Array(CIRCLE_SAMPLES);
+  for (let i = 0; i < CIRCLE_SAMPLES; i++) {
+    const theta = (i / CIRCLE_SAMPLES) * Math.PI * 2;
+    const ct = Math.cos(theta), st = Math.sin(theta);
+    circleSamples[i] = [
+      cosR*c.center[0] + sinR*(ct*c.u1[0] + st*c.u2[0]),
+      cosR*c.center[1] + sinR*(ct*c.u1[1] + st*c.u2[1]),
+      cosR*c.center[2] + sinR*(ct*c.u1[2] + st*c.u2[2]),
+      cosR*c.center[3] + sinR*(ct*c.u1[3] + st*c.u2[3]),
+    ];
+  }
+}
 
 function buildMarkers() {
   while (markerGroup.children.length) {
@@ -493,15 +526,25 @@ function buildMarkers() {
     c.geometry?.dispose();
     c.material?.dispose();
   }
-  poleMeshes = [];
-  for (let i = 0; i < poles.length; i++) {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.045, 18, 14),
-      new THREE.MeshBasicMaterial({ color: 0xff5566 })
-    );
-    markerGroup.add(m);
-    poleMeshes.push(m);
-  }
+  // fixed-center dot
+  circleCenterMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.035, 16, 12),
+    new THREE.MeshBasicMaterial({ color: 0xff5566, transparent: true, opacity: 0.7 })
+  );
+  markerGroup.add(circleCenterMesh);
+  // circle line (LineSegments; breaks at w = 0 just like the cells)
+  const maxSegs = CIRCLE_SAMPLES;
+  const positions = new Float32Array(maxSegs * 2 * 3);
+  const geom = new THREE.BufferGeometry();
+  const attr = new THREE.BufferAttribute(positions, 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geom.setAttribute('position', attr);
+  geom.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({ color: 0xff5566, transparent: true, opacity: 0.95 });
+  circleLine = new THREE.LineSegments(geom, mat);
+  circleLine.userData = { positions, attr };
+  markerGroup.add(circleLine);
+  // test-source dot
   sourceMesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.055, 18, 14),
     new THREE.MeshBasicMaterial({ color: 0xffd166 })
@@ -509,11 +552,30 @@ function buildMarkers() {
   markerGroup.add(sourceMesh);
 }
 
-function repositionMarkers() {
-  for (let i = 0; i < poles.length; i++) {
-    const proj = projectS3(poles[i]);
-    poleMeshes[i].position.set(proj.x, proj.y, proj.z);
+function reprojectCircle() {
+  const { positions, attr } = circleLine.userData;
+  const N = circleSamples.length;
+  let segIdx = 0;
+  let prev = projectS3(circleSamples[0]);
+  for (let i = 1; i <= N; i++) {
+    const cur = projectS3(circleSamples[i % N]);
+    if (prev.ball === cur.ball) {
+      const o = segIdx * 6;
+      positions[o + 0] = prev.x; positions[o + 1] = prev.y; positions[o + 2] = prev.z;
+      positions[o + 3] = cur.x;  positions[o + 4] = cur.y;  positions[o + 5] = cur.z;
+      segIdx++;
+    }
+    prev = cur;
   }
+  attr.needsUpdate = true;
+  circleLine.geometry.setDrawRange(0, segIdx * 2);
+  circleLine.geometry.computeBoundingSphere();
+}
+
+function repositionMarkers() {
+  const cp = projectS3(circleSource.center);
+  circleCenterMesh.position.set(cp.x, cp.y, cp.z);
+  reprojectCircle();
   const sp = projectS3(sourcePoint);
   sourceMesh.position.set(sp.x, sp.y, sp.z);
 }
@@ -521,14 +583,16 @@ function repositionMarkers() {
 // ====================================================================
 // Dirty flags & main loop
 // ====================================================================
+let dirtyCircle = true;
 let dirtyPotential = true;
 let dirtyGeodesics = true;
 let dirtyCells = true;
 let dirtyReproject = true;
 
 function rebuildAll() {
-  if (dirtyPotential) { buildPotential(); dirtyPotential = false; dirtyGeodesics = true; }
-  if (dirtyGeodesics) { rebuildTrajectories(); dirtyGeodesics = false; dirtyReproject = true; }
+  if (dirtyCircle)    { rebuildCircleSamples(); dirtyCircle = false; dirtyPotential = true; dirtyReproject = true; }
+  if (dirtyPotential) { buildPotential();       dirtyPotential = false; dirtyGeodesics = true; }
+  if (dirtyGeodesics) { rebuildTrajectories();  dirtyGeodesics = false; dirtyReproject = true; }
 }
 
 buildMarkers();
@@ -564,7 +628,7 @@ function tick(now) {
   if (keys['w']) { R = matMul(rotPlane(0, 1, dtheta), R); rotated = true; }
   if (rotated) { dirtyCells = true; dirtyReproject = true; }
 
-  if (dirtyPotential || dirtyGeodesics) rebuildAll();
+  if (dirtyCircle || dirtyPotential || dirtyGeodesics) rebuildAll();
   if (dirtyCells) { rebuildCellGeometry(); dirtyCells = false; }
   if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); dirtyReproject = false; }
 
@@ -599,17 +663,13 @@ function bindRange(id, valId, fmt, onChange) {
 }
 
 bindRange('alpha', 'alpha-v', x => x.toFixed(2), (x) => { params.alpha = x; dirtyGeodesics = true; });
+bindRange('rad', 'rad-v', x => x.toFixed(2), (x) => { circleSource.radius = x * Math.PI; dirtyCircle = true; });
 bindRange('numGeo', 'numGeo-v', x => String(x|0), (x) => { params.numGeodesics = x|0; dirtyGeodesics = true; });
 bindRange('geoLen', 'geoLen-v', x => x.toFixed(2), (x) => { params.geoLength = x * Math.PI; dirtyGeodesics = true; });
 bindRange('geoSteps', 'geoSteps-v', x => String(x|0), (x) => { params.geoSteps = x|0; dirtyGeodesics = true; });
 bindRange('voxN', 'voxN-v', x => String(x|0), (x) => { params.N = x|0; dirtyPotential = true; });
 bindRange('eps', 'eps-v', x => x.toFixed(3), (x) => { params.eps = x; dirtyPotential = true; });
 
-document.getElementById('reroll-poles').addEventListener('click', () => {
-  poles = [randomS3(), randomS3(), randomS3()];
-  buildMarkers();
-  dirtyPotential = true;
-});
 document.getElementById('reroll-source').addEventListener('click', () => {
   sourcePoint = randomS3();
   dirtyGeodesics = true;
