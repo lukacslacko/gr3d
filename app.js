@@ -678,6 +678,7 @@ const simParams = {
   steps: 120,
   showSim: true,
   viewSize: 0.50,
+  heliocentric: false,
 };
 let shipState = null;       // {gamma, v, X, Y}; null = need init
 let simHistory = null;      // result of last runShipSim()
@@ -1150,36 +1151,58 @@ function drawSimView(timeStep) {
   const ext = simParams.viewSize;
   const scale = w / (2 * ext);
   const toPx = (x, y) => [w/2 + x*scale, h/2 - y*scale];
-  // Grid hairlines at initial grid spacing.
-  simCtx.strokeStyle = '#1c2128';
-  simCtx.lineWidth = 1;
-  const gN = simParams.N;
-  const gridStep = gN <= 1 ? simParams.extent : (2 * simParams.extent) / (gN - 1);
-  for (let i = -gN; i <= gN; i++) {
-    const wp = i * gridStep;
-    if (Math.abs(wp) > ext) continue;
-    const [px, ] = toPx(wp, 0);
-    simCtx.beginPath(); simCtx.moveTo(px, 0); simCtx.lineTo(px, h); simCtx.stroke();
-    const [, py] = toPx(0, wp);
-    simCtx.beginPath(); simCtx.moveTo(0, py); simCtx.lineTo(w, py); simCtx.stroke();
+  const helio = simParams.heliocentric && simHistory.shipHistory.length > 0;
+  // Heliocentric basis: ship's initial position and initial velocity.
+  // They are orthonormal in R^4 by construction, so (p . e1, p . e2) is a
+  // legitimate orthogonal projection of S^3 onto a fixed 2-plane.
+  const hb = helio
+    ? { e1: simHistory.shipHistory[0].gamma, e2: simHistory.shipHistory[0].v }
+    : null;
+  const projHelio = (p) => ({ x: dot4(p, hb.e1), y: dot4(p, hb.e2) });
+  const ts = Math.max(0, Math.min(simHistory.shipHistory.length - 1, timeStep));
+  const shipNow = simHistory.shipHistory[ts];
+  // Grid hairlines (only in ship-centred view; in heliocentric the grid is meaningless).
+  if (!helio) {
+    simCtx.strokeStyle = '#1c2128';
+    simCtx.lineWidth = 1;
+    const gN = simParams.N;
+    const gridStep = gN <= 1 ? simParams.extent : (2 * simParams.extent) / (gN - 1);
+    for (let i = -gN; i <= gN; i++) {
+      const wp = i * gridStep;
+      if (Math.abs(wp) > ext) continue;
+      const [px, ] = toPx(wp, 0);
+      simCtx.beginPath(); simCtx.moveTo(px, 0); simCtx.lineTo(px, h); simCtx.stroke();
+      const [, py] = toPx(0, wp);
+      simCtx.beginPath(); simCtx.moveTo(0, py); simCtx.lineTo(w, py); simCtx.stroke();
+    }
   }
   // Axes.
   simCtx.strokeStyle = '#2a313c';
   simCtx.lineWidth = 1.2;
   simCtx.beginPath(); simCtx.moveTo(w/2, 0); simCtx.lineTo(w/2, h); simCtx.stroke();
   simCtx.beginPath(); simCtx.moveTo(0, h/2); simCtx.lineTo(w, h/2); simCtx.stroke();
-  // Project the source circle into the ship's spatial slice at this time.
-  if (simHistory.shipHistory && circleSamples.length) {
-    const sh = simHistory.shipHistory[Math.max(0, Math.min(simHistory.shipHistory.length - 1, timeStep))];
-    let closest = null;
+  // Compute 2D coordinates for everything we want to draw, based on mode.
+  const ship2D = helio ? projHelio(shipNow.gamma) : { x: 0, y: 0 };
+  // Project source curve.
+  if (circleSamples.length) {
     const pts = [];
+    let closest = null;
     for (let i = 0; i < circleSamples.length; i++) {
-      const vp = viewPoint(circleSamples[i], sh);
-      const x = vp.r * Math.cos(vp.phi), y = vp.r * Math.sin(vp.phi);
-      pts.push([x, y, vp.r]);
-      if (!closest || vp.r < closest[2]) closest = [x, y, vp.r];
+      let x, y, dval;
+      if (helio) {
+        const ph = projHelio(circleSamples[i]);
+        x = ph.x; y = ph.y;
+        const dx = x - ship2D.x, dy = y - ship2D.y;
+        dval = Math.hypot(dx, dy);
+      } else {
+        const vp = viewPoint(circleSamples[i], shipNow);
+        x = vp.r * Math.cos(vp.phi);
+        y = vp.r * Math.sin(vp.phi);
+        dval = vp.r;
+      }
+      pts.push([x, y]);
+      if (!closest || dval < closest[2]) closest = [x, y, dval];
     }
-    // Projected circle as a closed translucent red curve.
     simCtx.strokeStyle = 'rgba(255, 85, 102, 0.55)';
     simCtx.lineWidth = 1.5;
     simCtx.beginPath();
@@ -1189,23 +1212,21 @@ function drawSimView(timeStep) {
       if (i === 0) simCtx.moveTo(px, py); else simCtx.lineTo(px, py);
     }
     simCtx.stroke();
-    // Closest source point: solid red dot with a halo.
     if (closest) {
-      const [cx, cy, cr] = closest;
+      const [cx, cy, cd] = closest;
       const [cpx, cpy] = toPx(cx, cy);
       simCtx.fillStyle = '#ff5566';
       simCtx.beginPath(); simCtx.arc(cpx, cpy, 4.5, 0, Math.PI*2); simCtx.fill();
       simCtx.strokeStyle = 'rgba(255, 192, 200, 0.75)';
       simCtx.lineWidth = 1;
       simCtx.beginPath(); simCtx.arc(cpx, cpy, 8, 0, Math.PI*2); simCtx.stroke();
-      // Tiny distance readout near the dot.
       simCtx.fillStyle = '#ffb0bb';
       simCtx.font = '10.5px ui-monospace, Menlo, monospace';
       simCtx.textAlign = 'left';
-      simCtx.fillText(`d=${cr.toFixed(2)}`, cpx + 10, cpy - 6);
+      simCtx.fillText(`d=${cd.toFixed(2)}`, cpx + 10, cpy - 6);
     }
   }
-  // Trails up to timeStep.
+  // Test object trails up to timeStep.
   for (let i = 0; i < simHistory.objHistory.length; i++) {
     const hist = simHistory.objHistory[i];
     const o0 = simHistory.objs0[i];
@@ -1215,25 +1236,44 @@ function drawSimView(timeStep) {
     simCtx.beginPath();
     let drawing = false;
     for (let k = 0; k <= timeStep && k < hist.view.length; k++) {
-      const vw = hist.view[k];
-      if (!vw) { drawing = false; continue; }
-      const [px, py] = toPx(vw.r * Math.cos(vw.phi), vw.r * Math.sin(vw.phi));
+      let xPos, yPos;
+      if (helio) {
+        const pos = hist.pos[k];
+        if (!pos) { drawing = false; continue; }
+        const ph = projHelio(pos);
+        xPos = ph.x; yPos = ph.y;
+      } else {
+        const vw = hist.view[k];
+        if (!vw) { drawing = false; continue; }
+        xPos = vw.r * Math.cos(vw.phi);
+        yPos = vw.r * Math.sin(vw.phi);
+      }
+      const [px, py] = toPx(xPos, yPos);
       if (!drawing) { simCtx.moveTo(px, py); drawing = true; } else { simCtx.lineTo(px, py); }
     }
     simCtx.stroke();
   }
-  // Current positions.
+  // Test object current positions and tau rings.
   for (let i = 0; i < simHistory.objHistory.length; i++) {
     const hist = simHistory.objHistory[i];
     if (timeStep >= hist.view.length) continue;
     const vw = hist.view[timeStep];
     if (!vw) continue;
-    const [px, py] = toPx(vw.r * Math.cos(vw.phi), vw.r * Math.sin(vw.phi));
+    let xPos, yPos;
+    if (helio) {
+      const pos = hist.pos[timeStep];
+      if (!pos) continue;
+      const ph = projHelio(pos);
+      xPos = ph.x; yPos = ph.y;
+    } else {
+      xPos = vw.r * Math.cos(vw.phi);
+      yPos = vw.r * Math.sin(vw.phi);
+    }
+    const [px, py] = toPx(xPos, yPos);
     const o0 = simHistory.objs0[i];
     const colorH = ((Math.atan2(o0.y0, o0.x0) / (2*Math.PI)) + 0.5) % 1;
     simCtx.fillStyle = `hsl(${(colorH*360)|0}, 70%, 64%)`;
     simCtx.beginPath(); simCtx.arc(px, py, 3.5, 0, Math.PI*2); simCtx.fill();
-    // Tau ring (radius grows as tau drops).
     const dilation = Math.max(0, 1 - vw.tau);
     if (dilation > 0.01) {
       simCtx.strokeStyle = `hsla(${(colorH*360)|0}, 80%, 80%, ${0.35 + 0.45*dilation})`;
@@ -1241,12 +1281,30 @@ function drawSimView(timeStep) {
       simCtx.beginPath(); simCtx.arc(px, py, 4 + dilation*7, 0, Math.PI*2); simCtx.stroke();
     }
   }
-  // Ship at origin.
-  simCtx.fillStyle = '#ffd166';
-  simCtx.beginPath(); simCtx.arc(w/2, h/2, 5, 0, Math.PI*2); simCtx.fill();
-  simCtx.strokeStyle = '#fff4d6';
-  simCtx.lineWidth = 1;
-  simCtx.beginPath(); simCtx.arc(w/2, h/2, 7, 0, Math.PI*2); simCtx.stroke();
+  // Ship marker (with trail in heliocentric mode).
+  if (helio) {
+    simCtx.strokeStyle = 'rgba(255, 209, 102, 0.45)';
+    simCtx.lineWidth = 1.5;
+    simCtx.beginPath();
+    for (let k = 0; k <= ts; k++) {
+      const ph = projHelio(simHistory.shipHistory[k].gamma);
+      const [px, py] = toPx(ph.x, ph.y);
+      if (k === 0) simCtx.moveTo(px, py); else simCtx.lineTo(px, py);
+    }
+    simCtx.stroke();
+    const [px, py] = toPx(ship2D.x, ship2D.y);
+    simCtx.fillStyle = '#ffd166';
+    simCtx.beginPath(); simCtx.arc(px, py, 5, 0, Math.PI*2); simCtx.fill();
+    simCtx.strokeStyle = '#fff4d6';
+    simCtx.lineWidth = 1;
+    simCtx.beginPath(); simCtx.arc(px, py, 7, 0, Math.PI*2); simCtx.stroke();
+  } else {
+    simCtx.fillStyle = '#ffd166';
+    simCtx.beginPath(); simCtx.arc(w/2, h/2, 5, 0, Math.PI*2); simCtx.fill();
+    simCtx.strokeStyle = '#fff4d6';
+    simCtx.lineWidth = 1;
+    simCtx.beginPath(); simCtx.arc(w/2, h/2, 7, 0, Math.PI*2); simCtx.stroke();
+  }
 }
 
 drawSimView(0);
@@ -1363,6 +1421,10 @@ simTimeEl.addEventListener('input', () => {
 });
 bindRange('simview-size', 'simview-size-v', x => `view ${x.toFixed(2)}`, (x) => {
   simParams.viewSize = x;
+  drawSimView(simCurrentStep);
+});
+document.getElementById('heliocentric').addEventListener('change', (e) => {
+  simParams.heliocentric = e.target.checked;
   drawSimView(simCurrentStep);
 });
 document.getElementById('reroll-ship').addEventListener('click', () => {
