@@ -50,21 +50,25 @@
     <option value="inv">1 / (ε + d)</option>
     <option value="lor">d / (ε + d²)</option>
   </select></label>
-  <label>Circle radius (× π) <span class="v" id="rad-v">0.25</span><input type="range" id="rad" min="0.01" max="0.99" step="0.005" value="0.25"></label>
+  <label>Circle radius (× π) <span class="v" id="rad-v">0.50</span><input type="range" id="rad" min="0.01" max="0.99" step="0.005" value="0.50"></label>
   <label>Voxels per edge N <span class="v" id="voxN-v">12</span><input type="range" id="voxN" min="2" max="32" step="1" value="12"></label>
-  <label>ε (log scale) <span class="v" id="eps-v">5.0e-2</span><input type="range" id="eps" min="-5" max="-1" step="0.02" value="-1.301"></label>
+  <label>ε (log scale) <span class="v" id="eps-v">1.0e-4</span><input type="range" id="eps" min="-5" max="-1" step="0.02" value="-4"></label>
 
   <div class="section-hdr">Spaceship</div>
-  <label>Grid extent <span class="v" id="simext-v">0.60</span><input type="range" id="simext" min="0.05" max="2.0" step="0.05" value="0.60"></label>
-  <label>Grid N (per side) <span class="v" id="simN-v">5</span><input type="range" id="simN" min="2" max="9" step="1" value="5"></label>
+  <label>Grid extent <span class="v" id="simext-v">0.10</span><input type="range" id="simext" min="0.01" max="2.0" step="0.005" value="0.10"></label>
+  <label>Grid N (per side) <span class="v" id="simN-v">9</span><input type="range" id="simN" min="2" max="15" step="1" value="9"></label>
   <label>Δt (per step) <span class="v" id="simdt-v">0.05</span><input type="range" id="simdt" min="0.01" max="0.2" step="0.005" value="0.05"></label>
   <label>Steps <span class="v" id="simsteps-v">120</span><input type="range" id="simsteps" min="10" max="400" step="10" value="120"></label>
-  <div class="row-buttons">
-    <button id="reroll-ship">Reroll ship</button>
-    <button id="run-sim">Run simulation</button>
-  </div>
   <div class="row-checks">
+    <label><input type="checkbox" id="orbit-init" checked> orbit init</label>
     <label><input type="checkbox" id="show-sim" checked> worldlines</label>
+  </div>
+  <label>Orbit: distance from source <span class="v" id="orbDist-v">0.30</span><input type="range" id="orbDist" min="0.02" max="1.5" step="0.005" value="0.30"></label>
+  <label>Orbit: orth velocity (b) <span class="v" id="orbOrth-v">0.30</span><input type="range" id="orbOrth" min="-1.0" max="1.0" step="0.005" value="0.30"></label>
+  <div class="dim" style="font-size:10.5px; margin-top:4px; color:#88909d;">circular orbit at α=0 when b = sin(distance)</div>
+  <div class="row-buttons">
+    <button id="reroll-ship">Set ship</button>
+    <button id="run-sim">Run simulation</button>
   </div>
 </div>
 

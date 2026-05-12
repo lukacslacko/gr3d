@@ -10,11 +10,17 @@ const params = {
   numGeodesics: 24,
   geoLength: Math.PI,
   geoSteps: 160,
-  eps: 0.05,
+  eps: 1e-4,
   kernel: 'inv', // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
   showCells: false,
   showGeo: false,
   showMarkers: true,
+};
+
+const orbitParams = {
+  enabled: true,
+  distance: 0.30,
+  orthVel: 0.30,
 };
 
 function kernelPhi(d, eps) {
@@ -227,7 +233,7 @@ const circleSource = {
   center: [0, 0, 0, 1],
   u1:     [1, 0, 0, 0],
   u2:     [0, 1, 0, 0],
-  radius: 0.25 * Math.PI,
+  radius: 0.50 * Math.PI,
 };
 
 let sourcePoint = randomS3();
@@ -598,8 +604,8 @@ function repositionMarkers() {
 // in the small-dt limit the two coincide.
 // ====================================================================
 const simParams = {
-  extent: 0.60,
-  N: 5,
+  extent: 0.10,
+  N: 9,
   dt: 0.05,
   steps: 120,
   showSim: true,
@@ -638,10 +644,92 @@ function makeShip(gamma, vDir) {
   return { gamma: gamma.slice(), v: vDir.slice(), X: tangentBasis[0], Y: tangentBasis[1] };
 }
 
-function initialShip() {
+function randomShip() {
   const g = sourcePoint.slice();
   const v = randomTangent(g);
   return makeShip(g, v);
+}
+
+// Place the ship at distance d from the circle source, in a direction
+// perpendicular to the source. At the ship location its velocity is
+//   v_S = sqrt(1 - b^2) * e_para + b * e_pol
+// where e_para is the parallel-transported source tangent and e_pol is
+// the remaining orthonormal direction in T_{gamma_ship} S^3 (perpendicular
+// to the geodesic that took the ship there). The radial component is 0.
+// For round S^3, b = sin(d) gives a circular orbit at radius d.
+function orbitShip(d, b) {
+  const cs = circleSource;
+  const theta0 = 0;
+  const cosT0 = Math.cos(theta0), sinT0 = Math.sin(theta0);
+  const cosRc = Math.cos(cs.radius), sinRc = Math.sin(cs.radius);
+  const g_src = [
+    cosRc*cs.center[0] + sinRc*(cosT0*cs.u1[0] + sinT0*cs.u2[0]),
+    cosRc*cs.center[1] + sinRc*(cosT0*cs.u1[1] + sinT0*cs.u2[1]),
+    cosRc*cs.center[2] + sinRc*(cosT0*cs.u1[2] + sinT0*cs.u2[2]),
+    cosRc*cs.center[3] + sinRc*(cosT0*cs.u1[3] + sinT0*cs.u2[3]),
+  ];
+  const e_para = [
+    -sinT0*cs.u1[0] + cosT0*cs.u2[0],
+    -sinT0*cs.u1[1] + cosT0*cs.u2[1],
+    -sinT0*cs.u1[2] + cosT0*cs.u2[2],
+    -sinT0*cs.u1[3] + cosT0*cs.u2[3],
+  ];
+  // Gram-Schmidt of standard basis vectors against (g_src, e_para)
+  // gives an out-of-plane direction u_perp at the source.
+  const candidates = [[0,0,1,0], [0,0,0,1], [1,0,0,0], [0,1,0,0]];
+  function orthAgainst(v, basis) {
+    for (const b of basis) {
+      const c = dot4(v, b);
+      for (let i = 0; i < 4; i++) v[i] -= c * b[i];
+    }
+    const l = Math.hypot(v[0], v[1], v[2], v[3]);
+    if (l < 1e-6) return null;
+    return [v[0]/l, v[1]/l, v[2]/l, v[3]/l];
+  }
+  let u_perp = null;
+  for (const cand of candidates) {
+    const u = orthAgainst(cand.slice(), [g_src, e_para]);
+    if (u) { u_perp = u; break; }
+  }
+  if (!u_perp) u_perp = [0,0,1,0];
+  const cd = Math.cos(d), sd = Math.sin(d);
+  const g_ship = [
+    cd*g_src[0] + sd*u_perp[0],
+    cd*g_src[1] + sd*u_perp[1],
+    cd*g_src[2] + sd*u_perp[2],
+    cd*g_src[3] + sd*u_perp[3],
+  ];
+  // e_para is perpendicular to g_src, u_perp and the great-circle tangent
+  // throughout, so its parallel transport along the displacement geodesic
+  // is itself.
+  // Radial direction at the ship.
+  const e_rad = [
+    -sd*g_src[0] + cd*u_perp[0],
+    -sd*g_src[1] + cd*u_perp[1],
+    -sd*g_src[2] + cd*u_perp[2],
+    -sd*g_src[3] + cd*u_perp[3],
+  ];
+  // e_pol = the remaining unit vector orthogonal to (g_ship, e_para, e_rad).
+  let e_pol = null;
+  for (const cand of candidates) {
+    const u = orthAgainst(cand.slice(), [g_ship, e_para, e_rad]);
+    if (u) { e_pol = u; break; }
+  }
+  if (!e_pol) e_pol = [0,0,0,1];
+  const bc = Math.max(-1, Math.min(1, b));
+  const a = Math.sqrt(Math.max(0, 1 - bc*bc));
+  const v_S = [
+    a*e_para[0] + bc*e_pol[0],
+    a*e_para[1] + bc*e_pol[1],
+    a*e_para[2] + bc*e_pol[2],
+    a*e_para[3] + bc*e_pol[3],
+  ];
+  return makeShip(g_ship, v_S);
+}
+
+function initialShip() {
+  if (orbitParams.enabled) return orbitShip(orbitParams.distance, orbitParams.orthVel);
+  return randomShip();
 }
 
 // RK4 step that integrates one geodesic (gamma, v_geo) under the refractive
@@ -1201,8 +1289,20 @@ simTimeEl.addEventListener('input', () => {
   if (simHistory) simTimeLabel.textContent = `t = ${(k * simHistory.dt).toFixed(3)}`;
 });
 document.getElementById('reroll-ship').addEventListener('click', () => {
-  sourcePoint = randomS3();
+  if (!orbitParams.enabled) sourcePoint = randomS3();
   shipState = initialShip();
+});
+document.getElementById('orbit-init').addEventListener('change', (e) => {
+  orbitParams.enabled = e.target.checked;
+  shipState = initialShip();
+});
+bindRange('orbDist', 'orbDist-v', x => x.toFixed(3), (x) => {
+  orbitParams.distance = x;
+  if (orbitParams.enabled) shipState = initialShip();
+});
+bindRange('orbOrth', 'orbOrth-v', x => x.toFixed(3), (x) => {
+  orbitParams.orthVel = x;
+  if (orbitParams.enabled) shipState = initialShip();
 });
 document.getElementById('run-sim').addEventListener('click', () => {
   simHistory = runShipSim();
