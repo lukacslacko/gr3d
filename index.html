@@ -52,10 +52,10 @@
   </select></label>
   <label>Source <select id="sourceMode" style="float: right; background: #2b323d; color: #eceff4; border: 1px solid #3b4452; border-radius: 4px; padding: 1px 4px; font-size: 11.5px;">
     <option value="point">point (nearest d)</option>
-    <option value="current">current (∫ ds · (1−cosθ))</option>
+    <option value="current" selected>current (∫ ds · (1−cosθ))</option>
   </select></label>
   <label>Circle radius (× π) <span class="v" id="rad-v">0.50</span><input type="range" id="rad" min="0.01" max="0.99" step="0.005" value="0.50"></label>
-  <label>Voxels per edge N <span class="v" id="voxN-v">12</span><input type="range" id="voxN" min="2" max="32" step="1" value="12"></label>
+  <label>Voxels per edge N <span class="v" id="voxN-v">32</span><input type="range" id="voxN" min="2" max="64" step="1" value="32"></label>
   <label>ε (log scale) <span class="v" id="eps-v">1.0e-4</span><input type="range" id="eps" min="-5" max="-1" step="0.02" value="-4"></label>
 
   <div class="section-hdr">Spaceship</div>
@@ -89,7 +89,7 @@
     <span id="simview-size-v">view 0.50</span>
   </div>
   <div class="timerow" style="justify-content: flex-end;">
-    <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #c0c8d4;"><input type="checkbox" id="heliocentric"> heliocentric (mass-fixed frame)</label>
+    <label style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: #c0c8d4;"><input type="checkbox" id="heliocentric" checked> heliocentric (mass-fixed frame)</label>
   </div>
 </div>
 

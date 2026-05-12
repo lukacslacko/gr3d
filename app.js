@@ -5,14 +5,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 // Parameters (live-bound to UI)
 // ====================================================================
 const params = {
-  N: 12,
+  N: 32,
   alpha: 0.0,
   numGeodesics: 24,
   geoLength: Math.PI,
   geoSteps: 160,
   eps: 1e-4,
   kernel: 'inv',     // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
-  sourceMode: 'point', // 'point' = phi = kernel(d_min); 'current' = ∫ kernel(d(p,q))·(1-cosθ)·|ds|
+  sourceMode: 'current', // 'point' = phi = kernel(d_min); 'current' = ∫ kernel(d(p,q))·(1-cosθ)·|ds|
   currentSamples: 192, // number of curve samples used for the current integral
   showCells: false,
   showGeo: false,
@@ -678,7 +678,7 @@ const simParams = {
   steps: 120,
   showSim: true,
   viewSize: 0.50,
-  heliocentric: false,
+  heliocentric: true,
 };
 let shipState = null;       // {gamma, v, X, Y}; null = need init
 let simHistory = null;      // result of last runShipSim()
