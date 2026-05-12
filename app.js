@@ -11,7 +11,9 @@ const params = {
   geoLength: Math.PI,
   geoSteps: 160,
   eps: 1e-4,
-  kernel: 'inv', // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
+  kernel: 'inv',     // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
+  sourceMode: 'point', // 'point' = phi = kernel(d_min); 'current' = ∫ kernel(d(p,q))·(1-cosθ)·|ds|
+  currentSamples: 192, // number of curve samples used for the current integral
   showCells: false,
   showGeo: false,
   showMarkers: true,
@@ -249,7 +251,7 @@ function distToCircle(p) {
   return Math.acos(m);
 }
 
-function buildPotential() {
+function buildPotentialPoint() {
   const N = params.N;
   potential = new Float32Array(8 * N * N * N);
   for (let cellId = 0; cellId < 8; cellId++) {
@@ -273,6 +275,72 @@ function buildPotential() {
       }
     }
   }
+}
+
+// Current-source potential: discretize the circle into M tangent elements
+// and integrate phi(q) = sum_m kernel(d(p_m, q)) * (1 - cos(angle(ds_m, p_m->q))) * |ds|
+// where p_m->q is the initial unit tangent at p_m of the great-circle geodesic to q.
+function buildPotentialCurrent() {
+  const N = params.N;
+  const M = Math.max(8, params.currentSamples|0);
+  potential = new Float32Array(8 * N * N * N);
+  const cs = circleSource;
+  const cosRc = Math.cos(cs.radius), sinRc = Math.sin(cs.radius);
+  const elemLen = sinRc * (2 * Math.PI / M); // |dp/dtheta| = sinRc for unit u1, u2
+  const ps = new Float32Array(M * 4);
+  const dsd = new Float32Array(M * 4);
+  for (let m = 0; m < M; m++) {
+    const theta = (m / M) * 2 * Math.PI;
+    const ct = Math.cos(theta), st = Math.sin(theta);
+    for (let i = 0; i < 4; i++) {
+      ps[m*4 + i]  = cosRc*cs.center[i] + sinRc*(ct*cs.u1[i] + st*cs.u2[i]);
+      dsd[m*4 + i] = -st*cs.u1[i] + ct*cs.u2[i];
+    }
+  }
+  for (let cellId = 0; cellId < 8; cellId++) {
+    const axis = cellId >> 1;
+    const sign = (cellId & 1) ? -1 : +1;
+    const free = [0,1,2,3].filter(a => a !== axis);
+    const cellBase = cellId * N * N * N;
+    for (let ix = 0; ix < N; ix++) {
+      const ux = (ix + 0.5) * 2 / N - 1;
+      for (let iy = 0; iy < N; iy++) {
+        const uy = (iy + 0.5) * 2 / N - 1;
+        for (let iz = 0; iz < N; iz++) {
+          const uz = (iz + 0.5) * 2 / N - 1;
+          const v = [0,0,0,0];
+          v[axis] = sign;
+          v[free[0]] = ux; v[free[1]] = uy; v[free[2]] = uz;
+          const q = normalize4(v);
+          let phi = 0;
+          for (let m = 0; m < M; m++) {
+            const i4 = m * 4;
+            const px = ps[i4], py = ps[i4+1], pz = ps[i4+2], pw = ps[i4+3];
+            const dx = dsd[i4], dy = dsd[i4+1], dz = dsd[i4+2], dw = dsd[i4+3];
+            let cosD = px*q[0] + py*q[1] + pz*q[2] + pw*q[3];
+            if (cosD > 1) cosD = 1; else if (cosD < -1) cosD = -1;
+            const d = Math.acos(cosD);
+            const sinD = Math.sqrt(Math.max(0, 1 - cosD*cosD));
+            let cosA = 0;
+            if (sinD > 1e-9) {
+              const ex = (q[0] - cosD*px) / sinD;
+              const ey = (q[1] - cosD*py) / sinD;
+              const ez = (q[2] - cosD*pz) / sinD;
+              const ew = (q[3] - cosD*pw) / sinD;
+              cosA = dx*ex + dy*ey + dz*ez + dw*ew;
+            }
+            phi += kernelPhi(d, params.eps) * (1 - cosA) * elemLen;
+          }
+          potential[cellBase + ix * N * N + iy * N + iz] = phi;
+        }
+      }
+    }
+  }
+}
+
+function buildPotential() {
+  if (params.sourceMode === 'current') buildPotentialCurrent();
+  else buildPotentialPoint();
 }
 
 // Sample interpolated phi at any 4D point (not necessarily unit).
@@ -1272,6 +1340,10 @@ bindRange('voxN', 'voxN-v', x => String(x|0), (x) => { params.N = x|0; dirtyPote
 bindRange('eps', 'eps-v', x => Math.pow(10, x).toExponential(1), (x) => { params.eps = Math.pow(10, x); dirtyPotential = true; });
 document.getElementById('kernel').addEventListener('change', (e) => {
   params.kernel = e.target.value;
+  dirtyPotential = true;
+});
+document.getElementById('sourceMode').addEventListener('change', (e) => {
+  params.sourceMode = e.target.value;
   dirtyPotential = true;
 });
 
