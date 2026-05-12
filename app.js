@@ -587,6 +587,388 @@ function repositionMarkers() {
 }
 
 // ====================================================================
+// Spaceship simulation
+// --------------------------------------------------------------------
+// Interpret the refractive S^3 as a (1+2)-D positive-definite "spacetime":
+// the ship has a frame (v_S, X_S, Y_S) orthonormal in T_{gamma_S} S^3, with
+// v_S as its time direction. We propagate the ship along its refractive
+// geodesic and parallel-transport the spatial axes along it (round-S^3
+// rule du/ds = -(gamma' . u) gamma -- exact on round S^3, an approximation
+// under refraction). Test objects are placed at grid points in the ship's
+// initial (X_S, Y_S)-plane and given v_S parallel-transported along the
+// spatial geodesic to their location. Each object then propagates along
+// its own refractive geodesic by an amount dT = tau * dt of its own arc
+// length, where tau = v_S . v_i (ambient R^4) is the velocity dot product.
+// The view (phi, r) is read off by projecting gamma_i orthogonally to v_S
+// (round-S^3 spatial slicing) and inverting the round-S^3 exp at gamma_S.
+// This is a simplification of the spec's linear-estimate + grid-search:
+// in the small-dt limit the two coincide.
+// ====================================================================
+const simParams = {
+  extent: 0.60,
+  N: 5,
+  dt: 0.05,
+  steps: 120,
+  showSim: true,
+};
+let shipState = null;       // {gamma, v, X, Y}; null = need init
+let simHistory = null;      // result of last runShipSim()
+
+function randomTangent(g) {
+  for (;;) {
+    let v = [randn(), randn(), randn(), randn()];
+    const c = dot4(v, g);
+    for (let i = 0; i < 4; i++) v[i] -= c * g[i];
+    const len = Math.hypot(v[0], v[1], v[2], v[3]);
+    if (len > 1e-6) {
+      for (let i = 0; i < 4; i++) v[i] /= len;
+      return v;
+    }
+  }
+}
+
+function makeShip(gamma, vDir) {
+  // Build orthonormal X, Y orthogonal to (gamma, v).
+  const basis = [gamma, vDir];
+  const candidates = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+  candidates.sort((a, b) => (Math.abs(dot4(a,gamma)) + Math.abs(dot4(a,vDir))) - (Math.abs(dot4(b,gamma)) + Math.abs(dot4(b,vDir))));
+  const tangentBasis = [];
+  for (let k = 0; k < 4 && tangentBasis.length < 2; k++) {
+    let u = candidates[k].slice();
+    for (const b of basis) { const c = dot4(u, b); for (let i = 0; i < 4; i++) u[i] -= c * b[i]; }
+    for (const r of tangentBasis) { const c = dot4(u, r); for (let i = 0; i < 4; i++) u[i] -= c * r[i]; }
+    const len = Math.hypot(u[0], u[1], u[2], u[3]);
+    if (len < 1e-6) continue;
+    for (let i = 0; i < 4; i++) u[i] /= len;
+    tangentBasis.push(u);
+  }
+  return { gamma: gamma.slice(), v: vDir.slice(), X: tangentBasis[0], Y: tangentBasis[1] };
+}
+
+function initialShip() {
+  const g = sourcePoint.slice();
+  const v = randomTangent(g);
+  return makeShip(g, v);
+}
+
+// RK4 step that integrates one geodesic (gamma, v_geo) under the refractive
+// metric AND parallel-transports two extra tangent vectors A, B along it.
+// Returns [gamma', v_geo', A', B']. Pass dummy zero vectors to ignore A/B.
+function rk4StepFrame(gamma, vgeo, A, B, alpha, ds) {
+  const accel = (g, v) => geodesicAccel(g, v, alpha);
+  const ptDer = (g, v, u) => {
+    const c = v[0]*u[0] + v[1]*u[1] + v[2]*u[2] + v[3]*u[3];
+    return [-c*g[0], -c*g[1], -c*g[2], -c*g[3]];
+  };
+  const deriv = (g, v, a, b) => [v.slice(), accel(g, v), ptDer(g, v, a), ptDer(g, v, b)];
+  const step = (s, k) => [
+    [gamma[0]+s*k[0][0], gamma[1]+s*k[0][1], gamma[2]+s*k[0][2], gamma[3]+s*k[0][3]],
+    [vgeo[0]+s*k[1][0], vgeo[1]+s*k[1][1], vgeo[2]+s*k[1][2], vgeo[3]+s*k[1][3]],
+    [A[0]+s*k[2][0], A[1]+s*k[2][1], A[2]+s*k[2][2], A[3]+s*k[2][3]],
+    [B[0]+s*k[3][0], B[1]+s*k[3][1], B[2]+s*k[3][2], B[3]+s*k[3][3]],
+  ];
+  const k1 = deriv(gamma, vgeo, A, B);
+  const s2 = step(0.5*ds, k1); const k2 = deriv(s2[0], s2[1], s2[2], s2[3]);
+  const s3 = step(0.5*ds, k2); const k3 = deriv(s3[0], s3[1], s3[2], s3[3]);
+  const s4 = step(ds, k3);     const k4 = deriv(s4[0], s4[1], s4[2], s4[3]);
+  const out = [gamma.slice(), vgeo.slice(), A.slice(), B.slice()];
+  for (let q = 0; q < 4; q++) for (let i = 0; i < 4; i++)
+    out[q][i] += (ds/6) * (k1[q][i] + 2*k2[q][i] + 2*k3[q][i] + k4[q][i]);
+  // Project onto S^3 and tangents.
+  const gl = Math.hypot(out[0][0], out[0][1], out[0][2], out[0][3]) || 1;
+  for (let i = 0; i < 4; i++) out[0][i] /= gl;
+  const projTangent = (u) => {
+    const d = u[0]*out[0][0] + u[1]*out[0][1] + u[2]*out[0][2] + u[3]*out[0][3];
+    u[0] -= d*out[0][0]; u[1] -= d*out[0][1]; u[2] -= d*out[0][2]; u[3] -= d*out[0][3];
+  };
+  projTangent(out[1]); projTangent(out[2]); projTangent(out[3]);
+  return out;
+}
+
+// Trace ship by ds_total, integrating frame transport, with substeps.
+function traceShipFrame(ship, ds_total, subSteps = 4) {
+  let g = ship.gamma, v = ship.v, X = ship.X, Y = ship.Y;
+  const ds = ds_total / subSteps;
+  for (let s = 0; s < subSteps; s++) {
+    [g, v, X, Y] = rk4StepFrame(g, v, X, Y, params.alpha, ds);
+  }
+  // Reorthonormalize the frame against v.
+  const vsq = v[0]*v[0] + v[1]*v[1] + v[2]*v[2] + v[3]*v[3];
+  let d = (X[0]*v[0] + X[1]*v[1] + X[2]*v[2] + X[3]*v[3]) / vsq;
+  X = [X[0]-d*v[0], X[1]-d*v[1], X[2]-d*v[2], X[3]-d*v[3]];
+  const Xl = Math.hypot(X[0], X[1], X[2], X[3]) || 1;
+  X = [X[0]/Xl, X[1]/Xl, X[2]/Xl, X[3]/Xl];
+  d = (Y[0]*v[0] + Y[1]*v[1] + Y[2]*v[2] + Y[3]*v[3]) / vsq;
+  Y = [Y[0]-d*v[0], Y[1]-d*v[1], Y[2]-d*v[2], Y[3]-d*v[3]];
+  d = Y[0]*X[0] + Y[1]*X[1] + Y[2]*X[2] + Y[3]*X[3];
+  Y = [Y[0]-d*X[0], Y[1]-d*X[1], Y[2]-d*X[2], Y[3]-d*X[3]];
+  const Yl = Math.hypot(Y[0], Y[1], Y[2], Y[3]) || 1;
+  Y = [Y[0]/Yl, Y[1]/Yl, Y[2]/Yl, Y[3]/Yl];
+  return { gamma: g, v, X, Y };
+}
+
+// Place a test object: shoot a refractive spatial geodesic of length r in
+// direction cos(phi) X + sin(phi) Y, parallel-transporting v_S along it.
+function placeTestObject(ship, x, y) {
+  const r = Math.hypot(x, y);
+  if (r < 1e-9) return { gamma: ship.gamma.slice(), v: ship.v.slice(), T: 0, alive: true, x0: x, y0: y };
+  const cph = x / r, sph = y / r;
+  const dir = [
+    cph*ship.X[0] + sph*ship.Y[0], cph*ship.X[1] + sph*ship.Y[1],
+    cph*ship.X[2] + sph*ship.Y[2], cph*ship.X[3] + sph*ship.Y[3],
+  ];
+  const subSteps = Math.max(8, Math.ceil(r * 32));
+  let g = ship.gamma.slice(), vgeo = dir, u = ship.v.slice(), dummy = [0,0,0,0];
+  const ds = r / subSteps;
+  for (let s = 0; s < subSteps; s++) {
+    [g, vgeo, u, dummy] = rk4StepFrame(g, vgeo, u, dummy, params.alpha, ds);
+  }
+  // Renormalize the transported velocity.
+  const ul = Math.hypot(u[0], u[1], u[2], u[3]) || 1;
+  for (let i = 0; i < 4; i++) u[i] /= ul;
+  return { gamma: g, v: u, T: 0, alive: true, x0: x, y0: y };
+}
+
+// Project gamma_i onto the ship's spatial slice (round-S^3 slicing):
+// returns {r, phi, tau} where (r, phi) are the inverse-exp coordinates of
+// the orthogonal projection of gamma_i onto v_S^perp, expressed in (X_S, Y_S).
+function viewCoords(g_i, v_i, ship) {
+  const v = ship.v, gS = ship.gamma, X = ship.X, Y = ship.Y;
+  const vsq = v[0]*v[0] + v[1]*v[1] + v[2]*v[2] + v[3]*v[3];
+  const d = (g_i[0]*v[0] + g_i[1]*v[1] + g_i[2]*v[2] + g_i[3]*v[3]) / vsq;
+  const p = [g_i[0]-d*v[0], g_i[1]-d*v[1], g_i[2]-d*v[2], g_i[3]-d*v[3]];
+  const pl = Math.hypot(p[0], p[1], p[2], p[3]);
+  if (pl < 1e-9) return { r: 0, phi: 0, tau: 1 };
+  const pn = [p[0]/pl, p[1]/pl, p[2]/pl, p[3]/pl];
+  const cosR = Math.max(-1, Math.min(1, pn[0]*gS[0] + pn[1]*gS[1] + pn[2]*gS[2] + pn[3]*gS[3]));
+  const r = Math.acos(cosR);
+  let phi = 0;
+  if (r > 1e-6) {
+    const sinR = Math.sin(r);
+    const ux = (pn[0] - cosR*gS[0]) / sinR;
+    const uy = (pn[1] - cosR*gS[1]) / sinR;
+    const uz = (pn[2] - cosR*gS[2]) / sinR;
+    const uw = (pn[3] - cosR*gS[3]) / sinR;
+    const xc = ux*X[0] + uy*X[1] + uz*X[2] + uw*X[3];
+    const yc = ux*Y[0] + uy*Y[1] + uz*Y[2] + uw*Y[3];
+    phi = Math.atan2(yc, xc);
+  }
+  const vi_len = Math.sqrt(v_i[0]*v_i[0] + v_i[1]*v_i[1] + v_i[2]*v_i[2] + v_i[3]*v_i[3]) || 1;
+  const v_len = Math.sqrt(vsq) || 1;
+  const tau = (v[0]*v_i[0] + v[1]*v_i[1] + v[2]*v_i[2] + v[3]*v_i[3]) / (v_len * vi_len);
+  return { r, phi, tau };
+}
+
+function runShipSim() {
+  if (!shipState) shipState = initialShip();
+  const dt = simParams.dt;
+  const nSteps = simParams.steps;
+  // Initial test object grid
+  const N = simParams.N;
+  const ext = simParams.extent;
+  const objs = [];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      const u = N === 1 ? 0 : -1 + (2 * i) / (N - 1);
+      const w = N === 1 ? 0 : -1 + (2 * j) / (N - 1);
+      const x = u * ext, y = w * ext;
+      objs.push(placeTestObject(shipState, x, y));
+    }
+  }
+  // Snapshot initial states (objs is mutated in place during integration).
+  const objs0 = objs.map(o => ({ x0: o.x0, y0: o.y0, gamma: o.gamma.slice(), v: o.v.slice() }));
+  // Allocate per-object history.
+  const objHistory = objs.map(o => ({ x0: o.x0, y0: o.y0, view: [], T: [], alive: [] }));
+  // Ship history.
+  let ship = { gamma: shipState.gamma.slice(), v: shipState.v.slice(), X: shipState.X.slice(), Y: shipState.Y.slice() };
+  const shipPositions = [ship.gamma.slice()];
+  // Record step 0 views.
+  for (let i = 0; i < objs.length; i++) {
+    const v = viewCoords(objs[i].gamma, objs[i].v, ship);
+    objHistory[i].view.push(v);
+    objHistory[i].T.push(objs[i].T);
+    objHistory[i].alive.push(objs[i].alive);
+  }
+  // Step forward.
+  for (let k = 0; k < nSteps; k++) {
+    // Advance ship by dt.
+    ship = traceShipFrame(ship, dt, 4);
+    shipPositions.push(ship.gamma.slice());
+    // Advance each test object by tau * dt of its proper time.
+    for (let i = 0; i < objs.length; i++) {
+      const o = objs[i];
+      if (!o.alive) { objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); continue; }
+      const v_len = Math.hypot(o.v[0], o.v[1], o.v[2], o.v[3]) || 1;
+      const ship_vlen = Math.hypot(ship.v[0], ship.v[1], ship.v[2], ship.v[3]) || 1;
+      const dot = (ship.v[0]*o.v[0] + ship.v[1]*o.v[1] + ship.v[2]*o.v[2] + ship.v[3]*o.v[3]) / (v_len * ship_vlen);
+      if (dot <= 0) { o.alive = false; objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); continue; }
+      const dT = dot * dt;
+      // Integrate o.gamma, o.v by dT.
+      let g = o.gamma, vv = o.v;
+      const subs = 4;
+      const ds = dT / subs;
+      for (let s = 0; s < subs; s++) [g, vv] = rk4Step(g, vv, params.alpha, ds);
+      o.gamma = g; o.v = vv; o.T += dT;
+      const view = viewCoords(o.gamma, o.v, ship);
+      objHistory[i].view.push(view);
+      objHistory[i].T.push(o.T);
+      objHistory[i].alive.push(true);
+    }
+  }
+  return { shipPositions, objHistory, objs, objs0, dt };
+}
+
+// ====================================================================
+// Ship-sim 3D worldlines and 2D canvas
+// ====================================================================
+const simGroup = new THREE.Group();
+scene.add(simGroup);
+
+function clearSimGroup() {
+  while (simGroup.children.length) {
+    const c = simGroup.children.pop();
+    c.geometry?.dispose();
+    c.material?.dispose();
+  }
+}
+
+function rebuildSimGroup() {
+  clearSimGroup();
+  if (!simHistory) return;
+  // Ship worldline (yellow).
+  addPolylineFromS3Points(simHistory.shipPositions, 0xffd166, 1.0);
+  // Each test object: re-trace its refractive geodesic from the saved initial
+  // state (gamma0, v0) by its accumulated proper time.
+  for (let i = 0; i < simHistory.objs0.length; i++) {
+    const hist = simHistory.objHistory[i];
+    const T_final = hist.T[hist.T.length - 1];
+    if (T_final < 1e-6) continue;
+    const o0 = simHistory.objs0[i];
+    const traj = traceGeodesic(o0.gamma, o0.v, params.alpha, T_final, Math.max(20, Math.floor(T_final * 80)));
+    const colorH = ((Math.atan2(o0.y0, o0.x0) / (2*Math.PI)) + 0.5) % 1;
+    const color = new THREE.Color().setHSL(colorH, 0.65, 0.62);
+    addPolylineFromS3Points(traj, color.getHex(), 0.85);
+  }
+}
+
+function addPolylineFromS3Points(pts, color, opacity) {
+  const maxSegs = Math.max(1, pts.length - 1);
+  const positions = new Float32Array(maxSegs * 2 * 3);
+  const geom = new THREE.BufferGeometry();
+  const attr = new THREE.BufferAttribute(positions, 3);
+  attr.setUsage(THREE.DynamicDrawUsage);
+  geom.setAttribute('position', attr);
+  geom.setDrawRange(0, 0);
+  const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity });
+  const line = new THREE.LineSegments(geom, mat);
+  line.userData = { positions, attr, pts };
+  simGroup.add(line);
+}
+
+function reprojectSimGroup() {
+  for (const line of simGroup.children) {
+    const { positions, attr, pts } = line.userData;
+    let segIdx = 0;
+    let prev = null;
+    for (const p of pts) {
+      const proj = projectS3(p);
+      if (prev !== null && prev.ball === proj.ball) {
+        const o = segIdx * 6;
+        positions[o + 0] = prev.x; positions[o + 1] = prev.y; positions[o + 2] = prev.z;
+        positions[o + 3] = proj.x; positions[o + 4] = proj.y; positions[o + 5] = proj.z;
+        segIdx++;
+      }
+      prev = proj;
+    }
+    attr.needsUpdate = true;
+    line.geometry.setDrawRange(0, segIdx * 2);
+    line.geometry.computeBoundingSphere();
+  }
+}
+
+// 2D canvas drawing
+const simCanvas = document.getElementById('simcanvas');
+const simCtx = simCanvas.getContext('2d');
+
+function drawSimView(timeStep) {
+  const w = simCanvas.width, h = simCanvas.height;
+  simCtx.fillStyle = '#0e1116';
+  simCtx.fillRect(0, 0, w, h);
+  if (!simHistory) {
+    simCtx.fillStyle = '#5a6573';
+    simCtx.font = '12px ui-sans-serif';
+    simCtx.textAlign = 'center';
+    simCtx.fillText('Run a simulation to populate the view.', w/2, h/2);
+    return;
+  }
+  const ext = simParams.extent * 1.6;
+  const scale = w / (2 * ext);
+  const toPx = (x, y) => [w/2 + x*scale, h/2 - y*scale];
+  // Grid hairlines at initial grid spacing.
+  simCtx.strokeStyle = '#1c2128';
+  simCtx.lineWidth = 1;
+  const gN = simParams.N;
+  const gridStep = gN <= 1 ? simParams.extent : (2 * simParams.extent) / (gN - 1);
+  for (let i = -gN; i <= gN; i++) {
+    const wp = i * gridStep;
+    if (Math.abs(wp) > ext) continue;
+    const [px, ] = toPx(wp, 0);
+    simCtx.beginPath(); simCtx.moveTo(px, 0); simCtx.lineTo(px, h); simCtx.stroke();
+    const [, py] = toPx(0, wp);
+    simCtx.beginPath(); simCtx.moveTo(0, py); simCtx.lineTo(w, py); simCtx.stroke();
+  }
+  // Axes.
+  simCtx.strokeStyle = '#2a313c';
+  simCtx.lineWidth = 1.2;
+  simCtx.beginPath(); simCtx.moveTo(w/2, 0); simCtx.lineTo(w/2, h); simCtx.stroke();
+  simCtx.beginPath(); simCtx.moveTo(0, h/2); simCtx.lineTo(w, h/2); simCtx.stroke();
+  // Trails up to timeStep.
+  for (let i = 0; i < simHistory.objHistory.length; i++) {
+    const hist = simHistory.objHistory[i];
+    const o0 = simHistory.objs0[i];
+    const colorH = ((Math.atan2(o0.y0, o0.x0) / (2*Math.PI)) + 0.5) % 1;
+    simCtx.strokeStyle = `hsla(${(colorH*360)|0}, 65%, 65%, 0.55)`;
+    simCtx.lineWidth = 1.2;
+    simCtx.beginPath();
+    let drawing = false;
+    for (let k = 0; k <= timeStep && k < hist.view.length; k++) {
+      const vw = hist.view[k];
+      if (!vw) { drawing = false; continue; }
+      const [px, py] = toPx(vw.r * Math.cos(vw.phi), vw.r * Math.sin(vw.phi));
+      if (!drawing) { simCtx.moveTo(px, py); drawing = true; } else { simCtx.lineTo(px, py); }
+    }
+    simCtx.stroke();
+  }
+  // Current positions.
+  for (let i = 0; i < simHistory.objHistory.length; i++) {
+    const hist = simHistory.objHistory[i];
+    if (timeStep >= hist.view.length) continue;
+    const vw = hist.view[timeStep];
+    if (!vw) continue;
+    const [px, py] = toPx(vw.r * Math.cos(vw.phi), vw.r * Math.sin(vw.phi));
+    const o0 = simHistory.objs0[i];
+    const colorH = ((Math.atan2(o0.y0, o0.x0) / (2*Math.PI)) + 0.5) % 1;
+    simCtx.fillStyle = `hsl(${(colorH*360)|0}, 70%, 64%)`;
+    simCtx.beginPath(); simCtx.arc(px, py, 3.5, 0, Math.PI*2); simCtx.fill();
+    // Tau ring (radius grows as tau drops).
+    const dilation = Math.max(0, 1 - vw.tau);
+    if (dilation > 0.01) {
+      simCtx.strokeStyle = `hsla(${(colorH*360)|0}, 80%, 80%, ${0.35 + 0.45*dilation})`;
+      simCtx.lineWidth = 1;
+      simCtx.beginPath(); simCtx.arc(px, py, 4 + dilation*7, 0, Math.PI*2); simCtx.stroke();
+    }
+  }
+  // Ship at origin.
+  simCtx.fillStyle = '#ffd166';
+  simCtx.beginPath(); simCtx.arc(w/2, h/2, 5, 0, Math.PI*2); simCtx.fill();
+  simCtx.strokeStyle = '#fff4d6';
+  simCtx.lineWidth = 1;
+  simCtx.beginPath(); simCtx.arc(w/2, h/2, 7, 0, Math.PI*2); simCtx.stroke();
+}
+
+drawSimView(0);
+
+// ====================================================================
 // Dirty flags & main loop
 // ====================================================================
 let dirtyCircle = true;
@@ -636,11 +1018,12 @@ function tick(now) {
 
   if (dirtyCircle || dirtyPotential || dirtyGeodesics) rebuildAll();
   if (dirtyCells) { rebuildCellGeometry(); dirtyCells = false; }
-  if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); dirtyReproject = false; }
+  if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); reprojectSimGroup(); dirtyReproject = false; }
 
   cellGroup.visible = params.showCells;
   geodesicGroup.visible = params.showGeo;
   markerGroup.visible = params.showMarkers;
+  simGroup.visible = simParams.showSim;
 
   controls.update();
   renderer.render(scene, camera);
@@ -687,3 +1070,31 @@ document.getElementById('kernel').addEventListener('change', (e) => {
 document.getElementById('show-cells').addEventListener('change', (e) => { params.showCells = e.target.checked; });
 document.getElementById('show-geo').addEventListener('change', (e) => { params.showGeo = e.target.checked; });
 document.getElementById('show-mark').addEventListener('change', (e) => { params.showMarkers = e.target.checked; });
+
+// Spaceship sim wiring.
+bindRange('simext', 'simext-v', x => x.toFixed(2), (x) => { simParams.extent = x; });
+bindRange('simN', 'simN-v', x => String(x|0), (x) => { simParams.N = x|0; });
+bindRange('simdt', 'simdt-v', x => x.toFixed(3), (x) => { simParams.dt = x; });
+bindRange('simsteps', 'simsteps-v', x => String(x|0), (x) => { simParams.steps = x|0; });
+const simTimeEl = document.getElementById('simtime');
+const simTimeLabel = document.getElementById('simtime-v');
+simTimeEl.addEventListener('input', () => {
+  const k = parseInt(simTimeEl.value, 10);
+  drawSimView(k);
+  if (simHistory) simTimeLabel.textContent = `t = ${(k * simHistory.dt).toFixed(3)}`;
+});
+document.getElementById('reroll-ship').addEventListener('click', () => {
+  shipState = initialShip();
+});
+document.getElementById('run-sim').addEventListener('click', () => {
+  simHistory = runShipSim();
+  rebuildSimGroup();
+  reprojectSimGroup();
+  simTimeEl.max = String(simParams.steps);
+  simTimeEl.value = '0';
+  simTimeLabel.textContent = `t = ${(0).toFixed(3)}`;
+  drawSimView(0);
+});
+document.getElementById('show-sim').addEventListener('change', (e) => { simParams.showSim = e.target.checked; });
+// Reroll the test source should also invalidate ship state (ship starts there).
+document.getElementById('reroll-source').addEventListener('click', () => { shipState = null; });

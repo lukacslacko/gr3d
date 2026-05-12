@@ -7,7 +7,15 @@
   html, body { margin: 0; padding: 0; height: 100%; background: #0b0d10; color: #d8dee9; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; overflow: hidden; }
   #hud, #controls { position: fixed; top: 12px; padding: 12px 14px; background: rgba(20, 24, 30, 0.78); border: 1px solid #2a2f3a; border-radius: 8px; font-size: 12.5px; line-height: 1.45; }
   #hud { left: 12px; max-width: 380px; pointer-events: none; }
-  #controls { right: 12px; width: 260px; }
+  #controls { right: 12px; width: 260px; max-height: calc(100vh - 24px); overflow-y: auto; }
+  #controls .section-hdr { margin-top: 18px; padding-top: 10px; border-top: 1px solid #2a2f3a; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: #88909d; }
+  #simview { position: fixed; bottom: 50px; left: 12px; padding: 10px 12px; background: rgba(20, 24, 30, 0.78); border: 1px solid #2a2f3a; border-radius: 8px; }
+  #simview h1 { font-size: 12px; margin: 0 0 6px 0; }
+  #simview .dim { font-size: 11px; color: #88909d; margin-bottom: 6px; }
+  #simcanvas { display: block; width: 260px; height: 260px; background: #0e1116; border: 1px solid #1c2128; border-radius: 4px; cursor: crosshair; }
+  #simview .timerow { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  #simview .timerow input[type=range] { flex: 1; accent-color: #ffd166; }
+  #simview .timerow span { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: #e6e6e6; min-width: 74px; text-align: right; }
   h1 { font-size: 13px; margin: 0 0 6px 0; font-weight: 600; letter-spacing: 0.02em; color: #eceff4; }
   kbd { display: inline-block; padding: 1px 5px; border: 1px solid #4c566a; border-bottom-width: 2px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; background: #1c2128; color: #eceff4; margin: 0 1px; }
   .row { margin-top: 4px; }
@@ -55,6 +63,29 @@
     <label><input type="checkbox" id="show-cells" checked> cells</label>
     <label><input type="checkbox" id="show-geo" checked> geodesics</label>
     <label><input type="checkbox" id="show-mark" checked> markers</label>
+  </div>
+
+  <div class="section-hdr">Spaceship</div>
+  <label>Grid extent <span class="v" id="simext-v">0.60</span><input type="range" id="simext" min="0.05" max="2.0" step="0.05" value="0.60"></label>
+  <label>Grid N (per side) <span class="v" id="simN-v">5</span><input type="range" id="simN" min="2" max="9" step="1" value="5"></label>
+  <label>Δt (per step) <span class="v" id="simdt-v">0.05</span><input type="range" id="simdt" min="0.01" max="0.2" step="0.005" value="0.05"></label>
+  <label>Steps <span class="v" id="simsteps-v">120</span><input type="range" id="simsteps" min="10" max="400" step="10" value="120"></label>
+  <div class="row-buttons">
+    <button id="reroll-ship">Reroll ship</button>
+    <button id="run-sim">Run simulation</button>
+  </div>
+  <div class="row-checks">
+    <label><input type="checkbox" id="show-sim" checked> worldlines</label>
+  </div>
+</div>
+
+<div id="simview">
+  <h1>Ship's view (φ, r)</h1>
+  <div class="dim">2D Euclidean plane spanned by X<sub>S</sub>, Y<sub>S</sub>. Ring radius ∝ 1−τ (time dilation).</div>
+  <canvas id="simcanvas" width="260" height="260"></canvas>
+  <div class="timerow">
+    <input type="range" id="simtime" min="0" max="0" step="1" value="0">
+    <span id="simtime-v">t = 0.000</span>
   </div>
 </div>
 
