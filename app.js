@@ -778,16 +778,17 @@ function runShipSim() {
   // Snapshot initial states (objs is mutated in place during integration).
   const objs0 = objs.map(o => ({ x0: o.x0, y0: o.y0, gamma: o.gamma.slice(), v: o.v.slice() }));
   // Allocate per-object history.
-  const objHistory = objs.map(o => ({ x0: o.x0, y0: o.y0, view: [], T: [], alive: [] }));
+  const objHistory = objs.map(o => ({ x0: o.x0, y0: o.y0, view: [], T: [], alive: [], pos: [] }));
   // Ship history.
   let ship = { gamma: shipState.gamma.slice(), v: shipState.v.slice(), X: shipState.X.slice(), Y: shipState.Y.slice() };
   const shipPositions = [ship.gamma.slice()];
-  // Record step 0 views.
+  // Record step 0 views and positions.
   for (let i = 0; i < objs.length; i++) {
     const v = viewCoords(objs[i].gamma, objs[i].v, ship);
     objHistory[i].view.push(v);
     objHistory[i].T.push(objs[i].T);
     objHistory[i].alive.push(objs[i].alive);
+    objHistory[i].pos.push(objs[i].gamma.slice());
   }
   // Step forward.
   for (let k = 0; k < nSteps; k++) {
@@ -797,11 +798,11 @@ function runShipSim() {
     // Advance each test object by tau * dt of its proper time.
     for (let i = 0; i < objs.length; i++) {
       const o = objs[i];
-      if (!o.alive) { objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); continue; }
+      if (!o.alive) { objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); objHistory[i].pos.push(null); continue; }
       const v_len = Math.hypot(o.v[0], o.v[1], o.v[2], o.v[3]) || 1;
       const ship_vlen = Math.hypot(ship.v[0], ship.v[1], ship.v[2], ship.v[3]) || 1;
       const dot = (ship.v[0]*o.v[0] + ship.v[1]*o.v[1] + ship.v[2]*o.v[2] + ship.v[3]*o.v[3]) / (v_len * ship_vlen);
-      if (dot <= 0) { o.alive = false; objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); continue; }
+      if (dot <= 0) { o.alive = false; objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); objHistory[i].pos.push(null); continue; }
       const dT = dot * dt;
       // Integrate o.gamma, o.v by dT.
       let g = o.gamma, vv = o.v;
@@ -813,16 +814,22 @@ function runShipSim() {
       objHistory[i].view.push(view);
       objHistory[i].T.push(o.T);
       objHistory[i].alive.push(true);
+      objHistory[i].pos.push(o.gamma.slice());
     }
   }
   return { shipPositions, objHistory, objs, objs0, dt };
 }
 
 // ====================================================================
-// Ship-sim 3D worldlines and 2D canvas
+// Ship-sim 3D worldlines, 3D current-position markers, and 2D canvas
 // ====================================================================
 const simGroup = new THREE.Group();
 scene.add(simGroup);
+const simMarkerGroup = new THREE.Group();
+scene.add(simMarkerGroup);
+let shipMarker = null;
+let testMarkers = [];
+let simCurrentStep = 0;
 
 function clearSimGroup() {
   while (simGroup.children.length) {
@@ -863,6 +870,56 @@ function addPolylineFromS3Points(pts, color, opacity) {
   const line = new THREE.LineSegments(geom, mat);
   line.userData = { positions, attr, pts };
   simGroup.add(line);
+}
+
+function buildSimMarkers() {
+  while (simMarkerGroup.children.length) {
+    const c = simMarkerGroup.children.pop();
+    c.geometry?.dispose();
+    c.material?.dispose();
+  }
+  shipMarker = null;
+  testMarkers = [];
+  shipMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.07, 18, 14),
+    new THREE.MeshBasicMaterial({ color: 0xffd166 })
+  );
+  shipMarker.visible = false;
+  simMarkerGroup.add(shipMarker);
+  if (!simHistory) return;
+  for (let i = 0; i < simHistory.objs0.length; i++) {
+    const o0 = simHistory.objs0[i];
+    const colorH = ((Math.atan2(o0.y0, o0.x0) / (2*Math.PI)) + 0.5) % 1;
+    const color = new THREE.Color().setHSL(colorH, 0.65, 0.62);
+    const m = new THREE.Mesh(
+      new THREE.SphereGeometry(0.04, 14, 10),
+      new THREE.MeshBasicMaterial({ color })
+    );
+    m.visible = false;
+    simMarkerGroup.add(m);
+    testMarkers.push(m);
+  }
+}
+
+function updateSimMarkers(k) {
+  if (!simHistory || !shipMarker) {
+    if (shipMarker) shipMarker.visible = false;
+    for (const m of testMarkers) m.visible = false;
+    return;
+  }
+  const kc = Math.max(0, Math.min(simHistory.shipPositions.length - 1, k));
+  const sp = simHistory.shipPositions[kc];
+  const sproj = projectS3(sp);
+  shipMarker.position.set(sproj.x, sproj.y, sproj.z);
+  shipMarker.visible = true;
+  for (let i = 0; i < testMarkers.length; i++) {
+    const m = testMarkers[i];
+    const pos = simHistory.objHistory[i].pos[kc];
+    if (!pos) { m.visible = false; continue; }
+    const proj = projectS3(pos);
+    m.position.set(proj.x, proj.y, proj.z);
+    m.visible = true;
+  }
 }
 
 function reprojectSimGroup() {
@@ -1018,12 +1075,13 @@ function tick(now) {
 
   if (dirtyCircle || dirtyPotential || dirtyGeodesics) rebuildAll();
   if (dirtyCells) { rebuildCellGeometry(); dirtyCells = false; }
-  if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); reprojectSimGroup(); dirtyReproject = false; }
+  if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); reprojectSimGroup(); updateSimMarkers(simCurrentStep); dirtyReproject = false; }
 
   cellGroup.visible = params.showCells;
   geodesicGroup.visible = params.showGeo;
   markerGroup.visible = params.showMarkers;
   simGroup.visible = simParams.showSim;
+  simMarkerGroup.visible = simParams.showSim;
 
   controls.update();
   renderer.render(scene, camera);
@@ -1080,7 +1138,9 @@ const simTimeEl = document.getElementById('simtime');
 const simTimeLabel = document.getElementById('simtime-v');
 simTimeEl.addEventListener('input', () => {
   const k = parseInt(simTimeEl.value, 10);
+  simCurrentStep = k;
   drawSimView(k);
+  updateSimMarkers(k);
   if (simHistory) simTimeLabel.textContent = `t = ${(k * simHistory.dt).toFixed(3)}`;
 });
 document.getElementById('reroll-ship').addEventListener('click', () => {
@@ -1090,6 +1150,9 @@ document.getElementById('run-sim').addEventListener('click', () => {
   simHistory = runShipSim();
   rebuildSimGroup();
   reprojectSimGroup();
+  buildSimMarkers();
+  simCurrentStep = 0;
+  updateSimMarkers(0);
   simTimeEl.max = String(simParams.steps);
   simTimeEl.value = '0';
   simTimeLabel.textContent = `t = ${(0).toFixed(3)}`;
