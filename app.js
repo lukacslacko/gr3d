@@ -722,30 +722,33 @@ function placeTestObject(ship, x, y) {
   return { gamma: g, v: u, T: 0, alive: true, x0: x, y0: y };
 }
 
-// Project gamma_i onto the ship's spatial slice (round-S^3 slicing):
-// returns {r, phi, tau} where (r, phi) are the inverse-exp coordinates of
-// the orthogonal projection of gamma_i onto v_S^perp, expressed in (X_S, Y_S).
-function viewCoords(g_i, v_i, ship) {
+// (phi, r) of a point g on S^3 as seen by the ship: orthogonal projection
+// onto v_S^perp in ambient R^4, then round-S^3 inverse-exp at gamma_S.
+function viewPoint(g, ship) {
   const v = ship.v, gS = ship.gamma, X = ship.X, Y = ship.Y;
   const vsq = v[0]*v[0] + v[1]*v[1] + v[2]*v[2] + v[3]*v[3];
-  const d = (g_i[0]*v[0] + g_i[1]*v[1] + g_i[2]*v[2] + g_i[3]*v[3]) / vsq;
-  const p = [g_i[0]-d*v[0], g_i[1]-d*v[1], g_i[2]-d*v[2], g_i[3]-d*v[3]];
+  const d = (g[0]*v[0] + g[1]*v[1] + g[2]*v[2] + g[3]*v[3]) / vsq;
+  const p = [g[0]-d*v[0], g[1]-d*v[1], g[2]-d*v[2], g[3]-d*v[3]];
   const pl = Math.hypot(p[0], p[1], p[2], p[3]);
-  if (pl < 1e-9) return { r: 0, phi: 0, tau: 1 };
+  if (pl < 1e-9) return { r: 0, phi: 0 };
   const pn = [p[0]/pl, p[1]/pl, p[2]/pl, p[3]/pl];
   const cosR = Math.max(-1, Math.min(1, pn[0]*gS[0] + pn[1]*gS[1] + pn[2]*gS[2] + pn[3]*gS[3]));
   const r = Math.acos(cosR);
-  let phi = 0;
-  if (r > 1e-6) {
-    const sinR = Math.sin(r);
-    const ux = (pn[0] - cosR*gS[0]) / sinR;
-    const uy = (pn[1] - cosR*gS[1]) / sinR;
-    const uz = (pn[2] - cosR*gS[2]) / sinR;
-    const uw = (pn[3] - cosR*gS[3]) / sinR;
-    const xc = ux*X[0] + uy*X[1] + uz*X[2] + uw*X[3];
-    const yc = ux*Y[0] + uy*Y[1] + uz*Y[2] + uw*Y[3];
-    phi = Math.atan2(yc, xc);
-  }
+  if (r < 1e-6) return { r: 0, phi: 0 };
+  const sinR = Math.sin(r);
+  const ux = (pn[0] - cosR*gS[0]) / sinR;
+  const uy = (pn[1] - cosR*gS[1]) / sinR;
+  const uz = (pn[2] - cosR*gS[2]) / sinR;
+  const uw = (pn[3] - cosR*gS[3]) / sinR;
+  const xc = ux*X[0] + uy*X[1] + uz*X[2] + uw*X[3];
+  const yc = ux*Y[0] + uy*Y[1] + uz*Y[2] + uw*Y[3];
+  return { r, phi: Math.atan2(yc, xc) };
+}
+
+function viewCoords(g_i, v_i, ship) {
+  const { r, phi } = viewPoint(g_i, ship);
+  const v = ship.v;
+  const vsq = v[0]*v[0] + v[1]*v[1] + v[2]*v[2] + v[3]*v[3];
   const vi_len = Math.sqrt(v_i[0]*v_i[0] + v_i[1]*v_i[1] + v_i[2]*v_i[2] + v_i[3]*v_i[3]) || 1;
   const v_len = Math.sqrt(vsq) || 1;
   const tau = (v[0]*v_i[0] + v[1]*v_i[1] + v[2]*v_i[2] + v[3]*v_i[3]) / (v_len * vi_len);
@@ -775,6 +778,7 @@ function runShipSim() {
   // Ship history.
   let ship = { gamma: shipState.gamma.slice(), v: shipState.v.slice(), X: shipState.X.slice(), Y: shipState.Y.slice() };
   const shipPositions = [ship.gamma.slice()];
+  const shipHistory = [{ gamma: ship.gamma.slice(), v: ship.v.slice(), X: ship.X.slice(), Y: ship.Y.slice() }];
   // Record step 0 views and positions.
   for (let i = 0; i < objs.length; i++) {
     const v = viewCoords(objs[i].gamma, objs[i].v, ship);
@@ -793,6 +797,7 @@ function runShipSim() {
     // Advance ship by dt.
     ship = traceShipFrame(ship, dt, 4);
     shipPositions.push(ship.gamma.slice());
+    shipHistory.push({ gamma: ship.gamma.slice(), v: ship.v.slice(), X: ship.X.slice(), Y: ship.Y.slice() });
     // Advance each test object so that gamma_i lies on the NEW spatial slice
     // {p : p . v_S(t+dt) = 0}. We use the linearised rate
     //   dT/dt = - gamma_i . a_S / (v_i . v_S)
@@ -844,7 +849,7 @@ function runShipSim() {
       objHistory[i].pos.push(o.gamma.slice());
     }
   }
-  return { shipPositions, objHistory, objs, objs0, dt };
+  return { shipPositions, shipHistory, objHistory, objs, objs0, dt };
 }
 
 // ====================================================================
@@ -1006,6 +1011,43 @@ function drawSimView(timeStep) {
   simCtx.lineWidth = 1.2;
   simCtx.beginPath(); simCtx.moveTo(w/2, 0); simCtx.lineTo(w/2, h); simCtx.stroke();
   simCtx.beginPath(); simCtx.moveTo(0, h/2); simCtx.lineTo(w, h/2); simCtx.stroke();
+  // Project the source circle into the ship's spatial slice at this time.
+  if (simHistory.shipHistory && circleSamples.length) {
+    const sh = simHistory.shipHistory[Math.max(0, Math.min(simHistory.shipHistory.length - 1, timeStep))];
+    let closest = null;
+    const pts = [];
+    for (let i = 0; i < circleSamples.length; i++) {
+      const vp = viewPoint(circleSamples[i], sh);
+      const x = vp.r * Math.cos(vp.phi), y = vp.r * Math.sin(vp.phi);
+      pts.push([x, y, vp.r]);
+      if (!closest || vp.r < closest[2]) closest = [x, y, vp.r];
+    }
+    // Projected circle as a closed translucent red curve.
+    simCtx.strokeStyle = 'rgba(255, 85, 102, 0.55)';
+    simCtx.lineWidth = 1.5;
+    simCtx.beginPath();
+    for (let i = 0; i <= pts.length; i++) {
+      const [x, y] = pts[i % pts.length];
+      const [px, py] = toPx(x, y);
+      if (i === 0) simCtx.moveTo(px, py); else simCtx.lineTo(px, py);
+    }
+    simCtx.stroke();
+    // Closest source point: solid red dot with a halo.
+    if (closest) {
+      const [cx, cy, cr] = closest;
+      const [cpx, cpy] = toPx(cx, cy);
+      simCtx.fillStyle = '#ff5566';
+      simCtx.beginPath(); simCtx.arc(cpx, cpy, 4.5, 0, Math.PI*2); simCtx.fill();
+      simCtx.strokeStyle = 'rgba(255, 192, 200, 0.75)';
+      simCtx.lineWidth = 1;
+      simCtx.beginPath(); simCtx.arc(cpx, cpy, 8, 0, Math.PI*2); simCtx.stroke();
+      // Tiny distance readout near the dot.
+      simCtx.fillStyle = '#ffb0bb';
+      simCtx.font = '10.5px ui-monospace, Menlo, monospace';
+      simCtx.textAlign = 'left';
+      simCtx.fillText(`d=${cr.toFixed(2)}`, cpx + 10, cpy - 6);
+    }
+  }
   // Trails up to timeStep.
   for (let i = 0; i < simHistory.objHistory.length; i++) {
     const hist = simHistory.objHistory[i];
