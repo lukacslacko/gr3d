@@ -36,11 +36,11 @@
 <body>
 <div id="hud">
   <h1>S³ as 8 cubes — geodesics in a refractive medium</h1>
-  <div>Each tesseract cell is voxelized N³ ways. A potential <i>φ</i>(<i>d</i>) is built from the geodesic distance <i>d</i> on S³ to a <span style="color:#ff7a8b">circle source</span> (kernel selectable below) and gives a refractive index <i>n</i> = e<sup>αφ</sup>. Geodesics extremize ∫ <i>n</i> ds on S³.</div>
+  <div>S³ as a (1+2) positive-definite spacetime. A potential <i>φ</i>(<i>d</i>) is built from the geodesic distance <i>d</i> on S³ to a <span style="color:#ff7a8b">circle source</span> (kernel selectable below); <i>n</i> = e<sup>αφ</sup> is the refractive index. The <span style="color:#ffd166">ship</span> moves along its refractive geodesic; test objects on the ship's initial (X<sub>S</sub>, Y<sub>S</sub>) grid propagate to stay on the ship's spatial slice.</div>
   <div class="row"><b>Rotate in 4D</b> (hold): <kbd>X</kbd> X↔W &nbsp; <kbd>Y</kbd> Y↔W &nbsp; <kbd>Z</kbd> Z↔W &nbsp; <kbd>W</kbd> X↔Y</div>
   <div class="row"><kbd>Shift</kbd> reverses &nbsp;·&nbsp; <kbd>R</kbd> resets 4D rotation</div>
   <div class="row dim">Drag to orbit. Wheel to zoom. With α = 0 the geodesics are great circles on S³.</div>
-  <div class="row"><span class="legend-dot" style="background:#ff5566"></span>circle source &nbsp; <span class="legend-dot" style="background:#ffd166"></span>test source &nbsp; <span class="legend-dot" style="background:#88c0d0"></span>geodesic fan</div>
+  <div class="row"><span class="legend-dot" style="background:#ff5566"></span>circle source &nbsp; <span class="legend-dot" style="background:#ffd166"></span>ship &nbsp; <span class="legend-dot" style="background:#88c0d0"></span>test objects</div>
 </div>
 
 <div id="controls">
@@ -51,19 +51,8 @@
     <option value="lor">d / (ε + d²)</option>
   </select></label>
   <label>Circle radius (× π) <span class="v" id="rad-v">0.25</span><input type="range" id="rad" min="0.01" max="0.99" step="0.005" value="0.25"></label>
-  <label>Geodesics <span class="v" id="numGeo-v">24</span><input type="range" id="numGeo" min="1" max="128" step="1" value="24"></label>
-  <label>Length (× π) <span class="v" id="geoLen-v">1.00</span><input type="range" id="geoLen" min="0.1" max="2.0" step="0.02" value="1.0"></label>
-  <label>RK4 steps <span class="v" id="geoSteps-v">160</span><input type="range" id="geoSteps" min="20" max="600" step="10" value="160"></label>
   <label>Voxels per edge N <span class="v" id="voxN-v">12</span><input type="range" id="voxN" min="2" max="32" step="1" value="12"></label>
   <label>ε (log scale) <span class="v" id="eps-v">5.0e-2</span><input type="range" id="eps" min="-5" max="-1" step="0.02" value="-1.301"></label>
-  <div class="row-buttons">
-    <button id="reroll-source">Reroll test source</button>
-  </div>
-  <div class="row-checks">
-    <label><input type="checkbox" id="show-cells" checked> cells</label>
-    <label><input type="checkbox" id="show-geo" checked> geodesics</label>
-    <label><input type="checkbox" id="show-mark" checked> markers</label>
-  </div>
 
   <div class="section-hdr">Spaceship</div>
   <label>Grid extent <span class="v" id="simext-v">0.60</span><input type="range" id="simext" min="0.05" max="2.0" step="0.05" value="0.60"></label>

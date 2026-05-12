@@ -12,8 +12,8 @@ const params = {
   geoSteps: 160,
   eps: 0.05,
   kernel: 'inv', // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
-  showCells: true,
-  showGeo: true,
+  showCells: false,
+  showGeo: false,
   showMarkers: true,
 };
 
@@ -538,7 +538,7 @@ function buildMarkers() {
     new THREE.MeshBasicMaterial({ color: 0xff5566, transparent: true, opacity: 0.7 })
   );
   markerGroup.add(circleCenterMesh);
-  // circle line (LineSegments; breaks at w = 0 just like the cells)
+  // circle line (LineSegments; breaks at w = 0)
   const maxSegs = CIRCLE_SAMPLES;
   const positions = new Float32Array(maxSegs * 2 * 3);
   const geom = new THREE.BufferGeometry();
@@ -550,12 +550,7 @@ function buildMarkers() {
   circleLine = new THREE.LineSegments(geom, mat);
   circleLine.userData = { positions, attr };
   markerGroup.add(circleLine);
-  // test-source dot
-  sourceMesh = new THREE.Mesh(
-    new THREE.SphereGeometry(0.055, 18, 14),
-    new THREE.MeshBasicMaterial({ color: 0xffd166 })
-  );
-  markerGroup.add(sourceMesh);
+  sourceMesh = null;
 }
 
 function reprojectCircle() {
@@ -582,8 +577,6 @@ function repositionMarkers() {
   const cp = projectS3(circleSource.center);
   circleCenterMesh.position.set(cp.x, cp.y, cp.z);
   reprojectCircle();
-  const sp = projectS3(sourcePoint);
-  sourceMesh.position.set(sp.x, sp.y, sp.z);
 }
 
 // ====================================================================
@@ -1070,13 +1063,13 @@ let dirtyReproject = true;
 
 function rebuildAll() {
   if (dirtyCircle)    { rebuildCircleSamples(); dirtyCircle = false; dirtyPotential = true; dirtyReproject = true; }
-  if (dirtyPotential) { buildPotential();       dirtyPotential = false; dirtyGeodesics = true; }
-  if (dirtyGeodesics) { rebuildTrajectories();  dirtyGeodesics = false; dirtyReproject = true; }
+  if (dirtyPotential) { buildPotential();       dirtyPotential = false; }
+  // dirtyGeodesics / dirtyCells intentionally unused: the cell wireframes and
+  // geodesic fan are not rendered any more.
 }
 
 buildMarkers();
 rebuildAll();
-rebuildCellGeometry();
 repositionMarkers();
 
 // ====================================================================
@@ -1105,14 +1098,13 @@ function tick(now) {
   if (keys['y']) { R = matMul(rotPlane(1, 3, dtheta), R); rotated = true; }
   if (keys['z']) { R = matMul(rotPlane(2, 3, dtheta), R); rotated = true; }
   if (keys['w']) { R = matMul(rotPlane(0, 1, dtheta), R); rotated = true; }
-  if (rotated) { dirtyCells = true; dirtyReproject = true; }
+  if (rotated) dirtyReproject = true;
 
-  if (dirtyCircle || dirtyPotential || dirtyGeodesics) rebuildAll();
-  if (dirtyCells) { rebuildCellGeometry(); dirtyCells = false; }
-  if (dirtyReproject) { reprojectGeodesics(); repositionMarkers(); reprojectSimGroup(); updateSimMarkers(simCurrentStep); dirtyReproject = false; }
+  if (dirtyCircle || dirtyPotential) rebuildAll();
+  if (dirtyReproject) { repositionMarkers(); reprojectSimGroup(); updateSimMarkers(simCurrentStep); dirtyReproject = false; }
 
-  cellGroup.visible = params.showCells;
-  geodesicGroup.visible = params.showGeo;
+  cellGroup.visible = false;
+  geodesicGroup.visible = false;
   markerGroup.visible = params.showMarkers;
   simGroup.visible = simParams.showSim;
   simMarkerGroup.visible = simParams.showSim;
@@ -1143,25 +1135,14 @@ function bindRange(id, valId, fmt, onChange) {
   update();
 }
 
-bindRange('alpha', 'alpha-v', x => x.toFixed(2), (x) => { params.alpha = x; dirtyGeodesics = true; });
+bindRange('alpha', 'alpha-v', x => x.toFixed(2), (x) => { params.alpha = x; });
 bindRange('rad', 'rad-v', x => x.toFixed(2), (x) => { circleSource.radius = x * Math.PI; dirtyCircle = true; });
-bindRange('numGeo', 'numGeo-v', x => String(x|0), (x) => { params.numGeodesics = x|0; dirtyGeodesics = true; });
-bindRange('geoLen', 'geoLen-v', x => x.toFixed(2), (x) => { params.geoLength = x * Math.PI; dirtyGeodesics = true; });
-bindRange('geoSteps', 'geoSteps-v', x => String(x|0), (x) => { params.geoSteps = x|0; dirtyGeodesics = true; });
 bindRange('voxN', 'voxN-v', x => String(x|0), (x) => { params.N = x|0; dirtyPotential = true; });
 bindRange('eps', 'eps-v', x => Math.pow(10, x).toExponential(1), (x) => { params.eps = Math.pow(10, x); dirtyPotential = true; });
-
-document.getElementById('reroll-source').addEventListener('click', () => {
-  sourcePoint = randomS3();
-  dirtyGeodesics = true;
-});
 document.getElementById('kernel').addEventListener('change', (e) => {
   params.kernel = e.target.value;
   dirtyPotential = true;
 });
-document.getElementById('show-cells').addEventListener('change', (e) => { params.showCells = e.target.checked; });
-document.getElementById('show-geo').addEventListener('change', (e) => { params.showGeo = e.target.checked; });
-document.getElementById('show-mark').addEventListener('change', (e) => { params.showMarkers = e.target.checked; });
 
 // Spaceship sim wiring.
 bindRange('simext', 'simext-v', x => x.toFixed(2), (x) => { simParams.extent = x; });
@@ -1178,6 +1159,7 @@ simTimeEl.addEventListener('input', () => {
   if (simHistory) simTimeLabel.textContent = `t = ${(k * simHistory.dt).toFixed(3)}`;
 });
 document.getElementById('reroll-ship').addEventListener('click', () => {
+  sourcePoint = randomS3();
   shipState = initialShip();
 });
 document.getElementById('run-sim').addEventListener('click', () => {
@@ -1193,5 +1175,3 @@ document.getElementById('run-sim').addEventListener('click', () => {
   drawSimView(0);
 });
 document.getElementById('show-sim').addEventListener('change', (e) => { simParams.showSim = e.target.checked; });
-// Reroll the test source should also invalidate ship state (ship starts there).
-document.getElementById('reroll-source').addEventListener('click', () => { shipState = null; });
