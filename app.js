@@ -792,23 +792,57 @@ function runShipSim() {
   }
   // Step forward.
   for (let k = 0; k < nSteps; k++) {
+    // Snapshot old ship state (used to build a linear estimate of each
+    // test object's dT before refining against the NEW ship slice).
+    const old_gamma_S = ship.gamma.slice();
+    const old_v_S = ship.v.slice();
+    const a_S_old = geodesicAccel(old_gamma_S, old_v_S, params.alpha);
     // Advance ship by dt.
     ship = traceShipFrame(ship, dt, 4);
     shipPositions.push(ship.gamma.slice());
-    // Advance each test object by tau * dt of its proper time.
+    // Advance each test object so that gamma_i lies on the NEW spatial slice
+    // {p : p . v_S(t+dt) = 0}. We use the linearised rate
+    //   dT/dt = - gamma_i . a_S / (v_i . v_S)
+    // for an initial Euler step (this reduces to gamma_i . gamma_S / (v_i . v_S)
+    // for round S^3, giving cos(r) initially in the parallel-transport setup),
+    // then run up to 3 Newton iterations on F(T) = gamma_i(T) . v_S(new) = 0,
+    // F'(T) = v_i(T) . v_S(new).
     for (let i = 0; i < objs.length; i++) {
       const o = objs[i];
-      if (!o.alive) { objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); objHistory[i].pos.push(null); continue; }
-      const v_len = Math.hypot(o.v[0], o.v[1], o.v[2], o.v[3]) || 1;
-      const ship_vlen = Math.hypot(ship.v[0], ship.v[1], ship.v[2], ship.v[3]) || 1;
-      const dot = (ship.v[0]*o.v[0] + ship.v[1]*o.v[1] + ship.v[2]*o.v[2] + ship.v[3]*o.v[3]) / (v_len * ship_vlen);
-      if (dot <= 0) { o.alive = false; objHistory[i].view.push(null); objHistory[i].T.push(o.T); objHistory[i].alive.push(false); objHistory[i].pos.push(null); continue; }
-      const dT = dot * dt;
-      // Integrate o.gamma, o.v by dT.
+      const recordDead = () => {
+        objHistory[i].view.push(null);
+        objHistory[i].T.push(o.T);
+        objHistory[i].alive.push(false);
+        objHistory[i].pos.push(null);
+      };
+      if (!o.alive) { recordDead(); continue; }
+      const vdotv_old = old_v_S[0]*o.v[0] + old_v_S[1]*o.v[1] + old_v_S[2]*o.v[2] + old_v_S[3]*o.v[3];
+      if (vdotv_old <= 0) { o.alive = false; recordDead(); continue; }
+      const gi_dot_aS = o.gamma[0]*a_S_old[0] + o.gamma[1]*a_S_old[1] + o.gamma[2]*a_S_old[2] + o.gamma[3]*a_S_old[3];
+      const tauProp = -gi_dot_aS / vdotv_old;
+      if (!Number.isFinite(tauProp) || tauProp <= 0) { o.alive = false; recordDead(); continue; }
+      let dT = tauProp * dt;
+      // Sub-step the linear estimate.
       let g = o.gamma, vv = o.v;
       const subs = 4;
-      const ds = dT / subs;
-      for (let s = 0; s < subs; s++) [g, vv] = rk4Step(g, vv, params.alpha, ds);
+      const ds0 = dT / subs;
+      for (let s = 0; s < subs; s++) [g, vv] = rk4Step(g, vv, params.alpha, ds0);
+      // Newton refinement against gamma_i . v_S(new) = 0.
+      for (let it = 0; it < 3; it++) {
+        const F = g[0]*ship.v[0] + g[1]*ship.v[1] + g[2]*ship.v[2] + g[3]*ship.v[3];
+        if (Math.abs(F) < 1e-7) break;
+        const Fp = vv[0]*ship.v[0] + vv[1]*ship.v[1] + vv[2]*ship.v[2] + vv[3]*ship.v[3];
+        if (Math.abs(Fp) < 1e-9) break;
+        const delta = -F / Fp;
+        if (Math.abs(delta) < 1e-8) break;
+        const sub2 = 2;
+        const dds = delta / sub2;
+        for (let s = 0; s < sub2; s++) [g, vv] = rk4Step(g, vv, params.alpha, dds);
+        dT += delta;
+      }
+      // Drop if velocity alignment with new ship has flipped.
+      const vdotv_new = ship.v[0]*vv[0] + ship.v[1]*vv[1] + ship.v[2]*vv[2] + ship.v[3]*vv[3];
+      if (vdotv_new <= 0) { o.alive = false; recordDead(); continue; }
       o.gamma = g; o.v = vv; o.T += dT;
       const view = viewCoords(o.gamma, o.v, ship);
       objHistory[i].view.push(view);
