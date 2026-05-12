@@ -674,7 +674,7 @@ bindRange('numGeo', 'numGeo-v', x => String(x|0), (x) => { params.numGeodesics =
 bindRange('geoLen', 'geoLen-v', x => x.toFixed(2), (x) => { params.geoLength = x * Math.PI; dirtyGeodesics = true; });
 bindRange('geoSteps', 'geoSteps-v', x => String(x|0), (x) => { params.geoSteps = x|0; dirtyGeodesics = true; });
 bindRange('voxN', 'voxN-v', x => String(x|0), (x) => { params.N = x|0; dirtyPotential = true; });
-bindRange('eps', 'eps-v', x => x.toFixed(3), (x) => { params.eps = x; dirtyPotential = true; });
+bindRange('eps', 'eps-v', x => Math.pow(10, x).toExponential(1), (x) => { params.eps = Math.pow(10, x); dirtyPotential = true; });
 
 document.getElementById('reroll-source').addEventListener('click', () => {
   sourcePoint = randomS3();
