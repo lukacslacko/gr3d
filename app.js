@@ -11,10 +11,16 @@ const params = {
   geoLength: Math.PI,
   geoSteps: 160,
   eps: 0.05,
+  kernel: 'inv', // 'inv' = 1/(eps+d); 'lor' = d/(eps+d^2)
   showCells: true,
   showGeo: true,
   showMarkers: true,
 };
+
+function kernelPhi(d, eps) {
+  if (params.kernel === 'lor') return d / (eps + d * d);
+  return 1 / (eps + d);
+}
 
 // ====================================================================
 // Scene
@@ -256,7 +262,7 @@ function buildPotential() {
           v[free[0]] = ux; v[free[1]] = uy; v[free[2]] = uz;
           const p = normalize4(v);
           const d = distToCircle(p);
-          potential[cellBase + ix * N * N + iy * N + iz] = 1 / (d + params.eps);
+          potential[cellBase + ix * N * N + iy * N + iz] = kernelPhi(d, params.eps);
         }
       }
     }
@@ -673,6 +679,10 @@ bindRange('eps', 'eps-v', x => x.toFixed(3), (x) => { params.eps = x; dirtyPoten
 document.getElementById('reroll-source').addEventListener('click', () => {
   sourcePoint = randomS3();
   dirtyGeodesics = true;
+});
+document.getElementById('kernel').addEventListener('change', (e) => {
+  params.kernel = e.target.value;
+  dirtyPotential = true;
 });
 document.getElementById('show-cells').addEventListener('change', (e) => { params.showCells = e.target.checked; });
 document.getElementById('show-geo').addEventListener('change', (e) => { params.showGeo = e.target.checked; });
