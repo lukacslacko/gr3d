@@ -609,6 +609,7 @@ const simParams = {
   dt: 0.05,
   steps: 120,
   showSim: true,
+  viewSize: 0.50,
 };
 let shipState = null;       // {gamma, v, X, Y}; null = need init
 let simHistory = null;      // result of last runShipSim()
@@ -1078,7 +1079,7 @@ function drawSimView(timeStep) {
     simCtx.fillText('Run a simulation to populate the view.', w/2, h/2);
     return;
   }
-  const ext = simParams.extent * 1.6;
+  const ext = simParams.viewSize;
   const scale = w / (2 * ext);
   const toPx = (x, y) => [w/2 + x*scale, h/2 - y*scale];
   // Grid hairlines at initial grid spacing.
@@ -1265,7 +1266,7 @@ function bindRange(id, valId, fmt, onChange) {
   update();
 }
 
-bindRange('alpha', 'alpha-v', x => x.toFixed(2), (x) => { params.alpha = x; });
+bindRange('alpha', 'alpha-v', x => x.toFixed(3), (x) => { params.alpha = x; });
 bindRange('rad', 'rad-v', x => x.toFixed(2), (x) => { circleSource.radius = x * Math.PI; dirtyCircle = true; });
 bindRange('voxN', 'voxN-v', x => String(x|0), (x) => { params.N = x|0; dirtyPotential = true; });
 bindRange('eps', 'eps-v', x => Math.pow(10, x).toExponential(1), (x) => { params.eps = Math.pow(10, x); dirtyPotential = true; });
@@ -1287,6 +1288,10 @@ simTimeEl.addEventListener('input', () => {
   drawSimView(k);
   updateSimMarkers(k);
   if (simHistory) simTimeLabel.textContent = `t = ${(k * simHistory.dt).toFixed(3)}`;
+});
+bindRange('simview-size', 'simview-size-v', x => `view ${x.toFixed(2)}`, (x) => {
+  simParams.viewSize = x;
+  drawSimView(simCurrentStep);
 });
 document.getElementById('reroll-ship').addEventListener('click', () => {
   if (!orbitParams.enabled) sourcePoint = randomS3();
