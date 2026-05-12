@@ -913,6 +913,59 @@ function viewCoords(g_i, v_i, ship) {
   return { r, phi, tau };
 }
 
+// Build a heliocentric frame attached to the source point closest to g_ship.
+// e_para is the source curve's unit tangent there; (e_perp_a, e_perp_b) span
+// the 2D subspace of T_{gamma_src} S^3 perpendicular to the source curve.
+function buildHelioFrame(g_ship) {
+  const cs = circleSource;
+  const px = dot4(g_ship, cs.u1);
+  const py = dot4(g_ship, cs.u2);
+  const theta = Math.atan2(py, px);
+  const ct = Math.cos(theta), st = Math.sin(theta);
+  const cR = Math.cos(cs.radius), sR = Math.sin(cs.radius);
+  const g_src = [
+    cR*cs.center[0] + sR*(ct*cs.u1[0] + st*cs.u2[0]),
+    cR*cs.center[1] + sR*(ct*cs.u1[1] + st*cs.u2[1]),
+    cR*cs.center[2] + sR*(ct*cs.u1[2] + st*cs.u2[2]),
+    cR*cs.center[3] + sR*(ct*cs.u1[3] + st*cs.u2[3]),
+  ];
+  const e_para = [
+    -st*cs.u1[0] + ct*cs.u2[0],
+    -st*cs.u1[1] + ct*cs.u2[1],
+    -st*cs.u1[2] + ct*cs.u2[2],
+    -st*cs.u1[3] + ct*cs.u2[3],
+  ];
+  const cands = [[0,0,1,0], [0,0,0,1], [1,0,0,0], [0,1,0,0]];
+  const gs = (v, basis) => {
+    for (const b of basis) { const c = dot4(v, b); for (let i = 0; i < 4; i++) v[i] -= c * b[i]; }
+    const l = Math.hypot(v[0], v[1], v[2], v[3]);
+    if (l < 1e-6) return null;
+    return [v[0]/l, v[1]/l, v[2]/l, v[3]/l];
+  };
+  let e_pa = null, e_pb = null;
+  for (const c of cands) { e_pa = gs(c.slice(), [g_src, e_para]); if (e_pa) break; }
+  for (const c of cands) { e_pb = gs(c.slice(), [g_src, e_para, e_pa]); if (e_pb) break; }
+  return { g_src, e_para, e_pa, e_pb };
+}
+
+// Project a 4D point through the helio frame: round-S^3 inverse-exp at
+// gamma_src, then 2D coordinates in (e_pa, e_pb). gamma_src itself lands at
+// the origin; points along the source tangent line collapse there too.
+function helioProject(p, frame) {
+  const dot_pg = dot4(p, frame.g_src);
+  const cosR = dot_pg > 1 ? 1 : (dot_pg < -1 ? -1 : dot_pg);
+  const r = Math.acos(cosR);
+  if (r < 1e-9) return { x: 0, y: 0, r: 0 };
+  const sinR = Math.sin(r);
+  const ux = (p[0] - cosR * frame.g_src[0]) / sinR;
+  const uy = (p[1] - cosR * frame.g_src[1]) / sinR;
+  const uz = (p[2] - cosR * frame.g_src[2]) / sinR;
+  const uw = (p[3] - cosR * frame.g_src[3]) / sinR;
+  const xa = ux*frame.e_pa[0] + uy*frame.e_pa[1] + uz*frame.e_pa[2] + uw*frame.e_pa[3];
+  const xb = ux*frame.e_pb[0] + uy*frame.e_pb[1] + uz*frame.e_pb[2] + uw*frame.e_pb[3];
+  return { x: r * xa, y: r * xb, r };
+}
+
 function runShipSim() {
   if (!shipState) shipState = initialShip();
   const dt = simParams.dt;
@@ -1007,7 +1060,8 @@ function runShipSim() {
       objHistory[i].pos.push(o.gamma.slice());
     }
   }
-  return { shipPositions, shipHistory, objHistory, objs, objs0, dt };
+  const helioFrames = shipHistory.map(s => buildHelioFrame(s.gamma));
+  return { shipPositions, shipHistory, helioFrames, objHistory, objs, objs0, dt };
 }
 
 // ====================================================================
@@ -1152,15 +1206,13 @@ function drawSimView(timeStep) {
   const scale = w / (2 * ext);
   const toPx = (x, y) => [w/2 + x*scale, h/2 - y*scale];
   const helio = simParams.heliocentric && simHistory.shipHistory.length > 0;
-  // Heliocentric basis: ship's initial position and initial velocity.
-  // They are orthonormal in R^4 by construction, so (p . e1, p . e2) is a
-  // legitimate orthogonal projection of S^3 onto a fixed 2-plane.
-  const hb = helio
-    ? { e1: simHistory.shipHistory[0].gamma, e2: simHistory.shipHistory[0].v }
-    : null;
-  const projHelio = (p) => ({ x: dot4(p, hb.e1), y: dot4(p, hb.e2) });
   const ts = Math.max(0, Math.min(simHistory.shipHistory.length - 1, timeStep));
   const shipNow = simHistory.shipHistory[ts];
+  // Heliocentric frame: round-S^3 inverse-exp at the closest source point to
+  // the current ship, projected onto the 2D subspace perpendicular to the
+  // source curve. gamma_src(t) thus always sits at (0, 0).
+  const helioFrameNow = helio ? simHistory.helioFrames[ts] : null;
+  const projHelio = (p, fr) => helioProject(p, fr);
   // Grid hairlines (only in ship-centred view; in heliocentric the grid is meaningless).
   if (!helio) {
     simCtx.strokeStyle = '#1c2128';
@@ -1181,27 +1233,25 @@ function drawSimView(timeStep) {
   simCtx.lineWidth = 1.2;
   simCtx.beginPath(); simCtx.moveTo(w/2, 0); simCtx.lineTo(w/2, h); simCtx.stroke();
   simCtx.beginPath(); simCtx.moveTo(0, h/2); simCtx.lineTo(w, h/2); simCtx.stroke();
-  // Compute 2D coordinates for everything we want to draw, based on mode.
-  const ship2D = helio ? projHelio(shipNow.gamma) : { x: 0, y: 0 };
   // Project source curve.
   if (circleSamples.length) {
     const pts = [];
     let closest = null;
-    for (let i = 0; i < circleSamples.length; i++) {
-      let x, y, dval;
-      if (helio) {
-        const ph = projHelio(circleSamples[i]);
-        x = ph.x; y = ph.y;
-        const dx = x - ship2D.x, dy = y - ship2D.y;
-        dval = Math.hypot(dx, dy);
-      } else {
-        const vp = viewPoint(circleSamples[i], shipNow);
-        x = vp.r * Math.cos(vp.phi);
-        y = vp.r * Math.sin(vp.phi);
-        dval = vp.r;
+    if (helio) {
+      for (let i = 0; i < circleSamples.length; i++) {
+        const ph = projHelio(circleSamples[i], helioFrameNow);
+        pts.push([ph.x, ph.y]);
       }
-      pts.push([x, y]);
-      if (!closest || dval < closest[2]) closest = [x, y, dval];
+      // Closest source point IS gamma_src, which always sits at the origin.
+      const shipR = projHelio(shipNow.gamma, helioFrameNow).r;
+      closest = [0, 0, shipR];
+    } else {
+      for (let i = 0; i < circleSamples.length; i++) {
+        const vp = viewPoint(circleSamples[i], shipNow);
+        const x = vp.r * Math.cos(vp.phi), y = vp.r * Math.sin(vp.phi);
+        pts.push([x, y]);
+        if (!closest || vp.r < closest[2]) closest = [x, y, vp.r];
+      }
     }
     simCtx.strokeStyle = 'rgba(255, 85, 102, 0.55)';
     simCtx.lineWidth = 1.5;
@@ -1240,7 +1290,7 @@ function drawSimView(timeStep) {
       if (helio) {
         const pos = hist.pos[k];
         if (!pos) { drawing = false; continue; }
-        const ph = projHelio(pos);
+        const ph = projHelio(pos, simHistory.helioFrames[k]);
         xPos = ph.x; yPos = ph.y;
       } else {
         const vw = hist.view[k];
@@ -1263,7 +1313,7 @@ function drawSimView(timeStep) {
     if (helio) {
       const pos = hist.pos[timeStep];
       if (!pos) continue;
-      const ph = projHelio(pos);
+      const ph = projHelio(pos, helioFrameNow);
       xPos = ph.x; yPos = ph.y;
     } else {
       xPos = vw.r * Math.cos(vw.phi);
@@ -1287,12 +1337,13 @@ function drawSimView(timeStep) {
     simCtx.lineWidth = 1.5;
     simCtx.beginPath();
     for (let k = 0; k <= ts; k++) {
-      const ph = projHelio(simHistory.shipHistory[k].gamma);
+      const ph = projHelio(simHistory.shipHistory[k].gamma, simHistory.helioFrames[k]);
       const [px, py] = toPx(ph.x, ph.y);
       if (k === 0) simCtx.moveTo(px, py); else simCtx.lineTo(px, py);
     }
     simCtx.stroke();
-    const [px, py] = toPx(ship2D.x, ship2D.y);
+    const shipP = projHelio(shipNow.gamma, helioFrameNow);
+    const [px, py] = toPx(shipP.x, shipP.y);
     simCtx.fillStyle = '#ffd166';
     simCtx.beginPath(); simCtx.arc(px, py, 5, 0, Math.PI*2); simCtx.fill();
     simCtx.strokeStyle = '#fff4d6';
